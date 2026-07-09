@@ -18,7 +18,7 @@ public sealed class ScanProcessorTests
 
         Assert.True(result.Ok);
         Assert.Equal(1, result.ImageCount);
-        Assert.Contains(result.Manifest.Files, file => file.DestinationPath!.EndsWith("B31009-1/B31009-1-1.jpg"));
+        Assert.Contains(result.Manifest.Files, file => file.DestinationPath == Path.Combine(destinationRoot, "B31009-1", "B31009-1-1.jpg"));
         Assert.Contains(result.Reviewed, file => file.FileName == "notes.txt");
         Assert.True(Directory.Exists(sourceDir));
         Assert.False(Directory.Exists(Path.Combine(destinationRoot, "B31009-1")));

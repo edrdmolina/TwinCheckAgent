@@ -1,5 +1,7 @@
 # TwinCheck Scan Agent
 
+[![CI](https://github.com/edrdmolina/TwinCheckAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/edrdmolina/TwinCheckAgent/actions/workflows/ci.yml)
+
 Local multi-OS scan agent and GUI for TwinCheckN. This project is the clean rebuild of Scan-Lab focused on never losing scan files.
 
 ## Projects
