@@ -1,0 +1,59 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:TwinCheck.Agent.Gui.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+        x:Class="TwinCheck.Agent.Gui.Views.MainWindow"
+        Icon="/Assets/avalonia-logo.ico"
+        Width="760"
+        Height="520"
+        MinWidth="640"
+        MinHeight="440"
+        Title="TwinCheck Scan Agent">
+
+    <Design.DataContext>
+        <vm:MainWindowViewModel/>
+    </Design.DataContext>
+
+    <Grid RowDefinitions="Auto,*" Margin="24">
+        <StackPanel Spacing="4">
+            <TextBlock Text="TwinCheck Scan Agent" FontSize="24" FontWeight="SemiBold"/>
+            <TextBlock Text="Local scanner monitor and profile control" Foreground="#666666"/>
+        </StackPanel>
+
+        <Grid Grid.Row="1"
+              Margin="0,24,0,0"
+              RowDefinitions="Auto,Auto,Auto,Auto,Auto,*"
+              ColumnDefinitions="180,*">
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Agent URL" FontWeight="SemiBold"/>
+            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding AgentUrl}"/>
+
+            <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,14,0,0" Text="Status" FontWeight="SemiBold"/>
+            <TextBlock Grid.Row="1" Grid.Column="1" Margin="0,14,0,0" Text="{Binding Status}"/>
+
+            <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,14,0,0" Text="Certificate" FontWeight="SemiBold"/>
+            <TextBlock Grid.Row="2" Grid.Column="1" Margin="0,14,0,0" Text="{Binding CertificateStatus}"/>
+
+            <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,14,0,0" Text="Active profile" FontWeight="SemiBold"/>
+            <TextBlock Grid.Row="3" Grid.Column="1" Margin="0,14,0,0" Text="{Binding ActiveProfile}"/>
+
+            <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,14,0,0" Text="NAS health" FontWeight="SemiBold"/>
+            <TextBlock Grid.Row="4" Grid.Column="1" Margin="0,14,0,0" Text="{Binding NasStatus}"/>
+
+            <Border Grid.Row="5"
+                    Grid.ColumnSpan="2"
+                    Margin="0,12,0,0"
+                    Padding="16"
+                    BorderBrush="#D8D8D8"
+                    BorderThickness="1"
+                    CornerRadius="6">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Last operation" FontWeight="SemiBold"/>
+                    <TextBlock Text="{Binding LastOperation}"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+
+</Window>
