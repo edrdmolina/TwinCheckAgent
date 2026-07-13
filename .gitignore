@@ -9,3 +9,5 @@ TestResults/
 coverage/
 .DS_Store
 *.log
+
+.fake

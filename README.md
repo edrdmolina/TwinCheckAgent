@@ -38,6 +38,20 @@ File names default to:
 
 ## Run Locally
 
+This solution targets .NET 9, matching the SDK used by CI. Verify the SDK with:
+
+```bash
+./scripts/dotnet.sh --list-sdks
+```
+
+On Linux, if .NET 9 is installed under `~/.dotnet`, the repository test script
+finds it automatically. Run the complete restore, Release build, and test flow
+with:
+
+```bash
+./scripts/test.sh
+```
+
 Create development folders:
 
 ```bash
@@ -47,7 +61,7 @@ mkdir -p /tmp/twincheck-agent/source/inbox /tmp/twincheck-agent/destination
 Run the API:
 
 ```bash
-dotnet run --project src/TwinCheck.Agent.Api
+./scripts/dotnet.sh run --project src/TwinCheck.Agent.Api
 ```
 
 Development config uses:
@@ -67,13 +81,13 @@ Depending on the local launch profile, ASP.NET may choose a different port until
 Run the GUI shell:
 
 ```bash
-dotnet run --project src/TwinCheck.Agent.Gui
+./scripts/dotnet.sh run --project src/TwinCheck.Agent.Gui
 ```
 
 Run tests:
 
 ```bash
-dotnet test
+./scripts/test.sh
 ```
 
 ## Near-Term Work
