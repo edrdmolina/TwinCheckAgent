@@ -84,6 +84,14 @@ Run the GUI shell:
 ./scripts/dotnet.sh run --project src/TwinCheck.Agent.Gui
 ```
 
+The GUI writes this machine's local agent config to:
+
+```text
+~/.config/TwinCheck/ScanAgent/agent-config.json
+```
+
+Use the GUI to select the scanner source folder and destination folder, then save the active profile. Restart the API after saving so it reloads the local config.
+
 Run tests:
 
 ```bash
@@ -93,7 +101,6 @@ Run tests:
 ## Near-Term Work
 
 - Bind API launch settings to `https://localhost:3625` with local certificate guidance.
-- Add persistent local config editing from the GUI.
 - Add GUI polling for `/api/scan/health` and recent manifests.
 - Add BMP to TIFF and EXIF-on-copy processing.
 - Add candidate folder endpoint.

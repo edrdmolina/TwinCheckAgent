@@ -7,7 +7,8 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.WriteIndented = true;
 });
 
-var agentConfig = builder.Configuration.GetSection("Agent").Get<AgentConfig>() ?? new AgentConfig();
+var configuredAgentConfig = builder.Configuration.GetSection("Agent").Get<AgentConfig>() ?? new AgentConfig();
+var agentConfig = LocalAgentConfigStore.LoadOrDefault(configuredAgentConfig);
 builder.Services.AddSingleton(agentConfig);
 builder.Services.AddSingleton<OperationStore>();
 builder.Services.AddSingleton<ScanProcessor>();
