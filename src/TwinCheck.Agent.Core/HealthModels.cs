@@ -28,10 +28,16 @@ public sealed record OperationSummary(
     int ImageCount,
     bool Ok);
 
-public sealed class HealthService(AgentConfig config, OperationStore operationStore)
+public sealed class HealthService(AgentConfigProvider configProvider, OperationStore operationStore)
 {
+    public HealthService(AgentConfig config, OperationStore operationStore)
+        : this(new AgentConfigProvider(config), operationStore)
+    {
+    }
+
     public AgentHealth GetHealth(string agentUrl)
     {
+        var config = configProvider.Current;
         var profileHealth = config.Profiles
             .Select(profile => new ScannerProfileHealth(
                 profile.Id,

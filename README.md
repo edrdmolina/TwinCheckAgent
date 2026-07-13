@@ -90,7 +90,7 @@ The GUI writes this machine's local agent config to:
 ~/.config/TwinCheck/ScanAgent/agent-config.json
 ```
 
-Use the GUI to select the scanner source folder and destination folder, then save the active profile. Restart the API after saving so it reloads the local config.
+Use the GUI to select the scanner source folder and destination folder, then save the active profile. The API reloads this local config on the next request.
 
 Run tests:
 

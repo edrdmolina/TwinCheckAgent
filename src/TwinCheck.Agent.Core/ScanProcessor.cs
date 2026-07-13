@@ -1,9 +1,15 @@
 namespace TwinCheck.Agent.Core;
 
-public sealed class ScanProcessor(AgentConfig config, OperationStore operationStore)
+public sealed class ScanProcessor(AgentConfigProvider configProvider, OperationStore operationStore)
 {
+    public ScanProcessor(AgentConfig config, OperationStore operationStore)
+        : this(new AgentConfigProvider(config), operationStore)
+    {
+    }
+
     public ProcessScanResult Process(ProcessScanRequest request)
     {
+        var config = configProvider.Current;
         if (string.IsNullOrWhiteSpace(request.IdempotencyKey))
         {
             throw new ArgumentException("Idempotency key is required.", nameof(request));

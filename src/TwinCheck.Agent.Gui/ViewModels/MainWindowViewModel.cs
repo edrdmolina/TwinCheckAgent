@@ -141,7 +141,7 @@ public class MainWindowViewModel : ViewModelBase
         };
 
         LocalAgentConfigStore.Save(config);
-        StatusMessage = $"Saved config. Restart the agent API to use these paths. {DateTime.Now:t}";
+        StatusMessage = $"Saved config. The API will use these settings on the next request. {DateTime.Now:t}";
         this.RaisePropertyChanged(nameof(SourceHealth));
         this.RaisePropertyChanged(nameof(DestinationHealth));
     }

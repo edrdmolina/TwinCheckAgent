@@ -8,8 +8,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 });
 
 var configuredAgentConfig = builder.Configuration.GetSection("Agent").Get<AgentConfig>() ?? new AgentConfig();
-var agentConfig = LocalAgentConfigStore.LoadOrDefault(configuredAgentConfig);
-builder.Services.AddSingleton(agentConfig);
+builder.Services.AddSingleton(new AgentConfigProvider(configuredAgentConfig));
 builder.Services.AddSingleton<OperationStore>();
 builder.Services.AddSingleton<ScanProcessor>();
 builder.Services.AddSingleton<HealthService>();
@@ -52,7 +51,7 @@ app.Use(async (context, next) =>
         return;
     }
 
-    var configuredKey = agentConfig.ApiKey;
+    var configuredKey = context.RequestServices.GetRequiredService<AgentConfigProvider>().Current.ApiKey;
     var suppliedKey = context.Request.Headers["X-Api-Key"].ToString();
     if (string.IsNullOrWhiteSpace(configuredKey)
         || string.IsNullOrWhiteSpace(suppliedKey)
@@ -84,21 +83,25 @@ app.MapGet("/api/scan/health", (HttpContext context, HealthService healthService
     return Results.Ok(healthService.GetHealth(agentUrl));
 });
 
-app.MapGet("/api/scan/config", (AgentConfig config) => Results.Ok(new
+app.MapGet("/api/scan/config", (AgentConfigProvider configProvider) =>
 {
-    config.AgentName,
-    config.Version,
-    config.ActiveProfileId,
-    Profiles = config.Profiles.Select(profile => new
+    var config = configProvider.Current;
+    return Results.Ok(new
     {
-        profile.Id,
-        profile.Name,
-        profile.SourceDir,
-        profile.DestinationDir,
-        profile.NamingPattern,
-        profile.Options
-    })
-}));
+        config.AgentName,
+        config.Version,
+        config.ActiveProfileId,
+        Profiles = config.Profiles.Select(profile => new
+        {
+            profile.Id,
+            profile.Name,
+            profile.SourceDir,
+            profile.DestinationDir,
+            profile.NamingPattern,
+            profile.Options
+        })
+    });
+});
 
 app.MapPost("/api/scan/process", (ProcessScanRequest request, ScanProcessor processor) =>
 {
