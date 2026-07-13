@@ -17,7 +17,7 @@ public sealed class ScanProcessor(AgentConfig config, OperationStore operationSt
             config.AllowedDestinationRoots,
             "destination");
 
-        var finalDir = Path.Combine(destinationRoot, $"{request.OrderNumber}-{request.RollNumber}");
+        var finalDir = BuildFinalDirectory(destinationRoot, request.OrderNumber, request.RollNumber);
         var existingManifest = operationStore.TryReadManifest(finalDir, request.IdempotencyKey);
         if (existingManifest is not null && !request.DryRun)
         {
@@ -243,6 +243,9 @@ public sealed class ScanProcessor(AgentConfig config, OperationStore operationSt
 
         throw new IOException($"Could not resolve a collision-free destination for '{candidate}'.");
     }
+
+    private static string BuildFinalDirectory(string destinationRoot, string orderNumber, string rollNumber) =>
+        Path.Combine(destinationRoot, orderNumber, $"{orderNumber}-{rollNumber}");
 
     private static void ArchiveSourceFolder(string sourceDir, string destinationRoot, string idempotencyKey)
     {

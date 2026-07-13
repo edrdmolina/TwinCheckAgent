@@ -27,7 +27,7 @@ The processor currently implements these rules:
 Destination folders currently use:
 
 ```text
-<destinationDir>/<orderNumber>-<rollNumber>/
+<destinationDir>/<orderNumber>/<orderNumber>-<rollNumber>/
 ```
 
 File names default to:

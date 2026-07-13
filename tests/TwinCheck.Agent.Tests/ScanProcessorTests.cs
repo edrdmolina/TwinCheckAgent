@@ -18,10 +18,11 @@ public sealed class ScanProcessorTests
 
         Assert.True(result.Ok);
         Assert.Equal(1, result.ImageCount);
-        Assert.Contains(result.Manifest.Files, file => file.DestinationPath == Path.Combine(destinationRoot, "B31009-1", "B31009-1-1.jpg"));
+        Assert.Equal(Path.Combine(destinationRoot, "B31009", "B31009-1"), result.Manifest.FinalDir);
+        Assert.Contains(result.Manifest.Files, file => file.DestinationPath == Path.Combine(destinationRoot, "B31009", "B31009-1", "B31009-1-1.jpg"));
         Assert.Contains(result.Reviewed, file => file.FileName == "notes.txt");
         Assert.True(Directory.Exists(sourceDir));
-        Assert.False(Directory.Exists(Path.Combine(destinationRoot, "B31009-1")));
+        Assert.False(Directory.Exists(Path.Combine(destinationRoot, "B31009", "B31009-1")));
     }
 
     [Fact]
@@ -36,7 +37,7 @@ public sealed class ScanProcessorTests
         var processor = workspace.CreateProcessor(sourceDir, destinationRoot);
         var result = processor.Process(workspace.CreateRequest());
 
-        var finalImage = Path.Combine(destinationRoot, "B31009-1", "B31009-1-1.jpg");
+        var finalImage = Path.Combine(destinationRoot, "B31009", "B31009-1", "B31009-1-1.jpg");
         var reviewFile = Path.Combine(destinationRoot, "_review", "op-1", "metadata.json");
         var processedRoot = Path.Combine(destinationRoot, "_processed");
 
@@ -46,7 +47,7 @@ public sealed class ScanProcessorTests
         Assert.True(File.Exists(reviewFile));
         Assert.False(Directory.Exists(sourceDir));
         Assert.Contains(Directory.EnumerateDirectories(processedRoot), path => path.Contains("roll-a-op-1"));
-        Assert.True(File.Exists(Path.Combine(destinationRoot, "B31009-1", "manifest-op-1.json")));
+        Assert.True(File.Exists(Path.Combine(destinationRoot, "B31009", "B31009-1", "manifest-op-1.json")));
     }
 
     [Fact]
@@ -55,7 +56,7 @@ public sealed class ScanProcessorTests
         using var workspace = new TempWorkspace();
         var sourceDir = workspace.CreateSource("roll-a");
         var destinationRoot = workspace.CreateDestination();
-        var finalDir = Path.Combine(destinationRoot, "B31009-1");
+        var finalDir = Path.Combine(destinationRoot, "B31009", "B31009-1");
         Directory.CreateDirectory(finalDir);
         File.WriteAllText(Path.Combine(finalDir, "B31009-1-1.jpg"), "existing-different-image");
         workspace.WriteFile(sourceDir, "scan001.jpg", "new-image");
@@ -75,7 +76,7 @@ public sealed class ScanProcessorTests
         using var workspace = new TempWorkspace();
         var sourceDir = workspace.CreateSource("roll-a");
         var destinationRoot = workspace.CreateDestination();
-        var finalDir = Path.Combine(destinationRoot, "B31009-1");
+        var finalDir = Path.Combine(destinationRoot, "B31009", "B31009-1");
         Directory.CreateDirectory(finalDir);
         File.WriteAllText(Path.Combine(finalDir, "B31009-1-1.jpg"), "same-image");
         workspace.WriteFile(sourceDir, "scan001.jpg", "same-image");
