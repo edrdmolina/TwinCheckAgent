@@ -127,6 +127,52 @@ public sealed class ScanProcessorTests
         Assert.Contains("outside the configured allowed roots", exception.Message);
     }
 
+    [Fact]
+    public void SourceRootWithSingleRollSubfolderProcessesAndArchivesOnlyRollFolder()
+    {
+        using var workspace = new TempWorkspace();
+        var sourceRoot = workspace.CreateSource("Target");
+        var rollFolder = Path.Combine(sourceRoot, "B31485-8");
+        var destinationRoot = workspace.CreateDestination();
+        workspace.WriteFile(rollFolder, "frame001.tif", "image-one");
+        workspace.WriteFile(rollFolder, "frame002.tif", "image-two");
+
+        var processor = workspace.CreateProcessor(sourceRoot, destinationRoot);
+        var result = processor.Process(workspace.CreateRequest());
+
+        Assert.True(result.Ok);
+        Assert.Equal(2, result.ImageCount);
+        Assert.True(Directory.Exists(sourceRoot));
+        Assert.False(Directory.Exists(rollFolder));
+        Assert.True(File.Exists(Path.Combine(destinationRoot, "B31009", "B31009-1", "B31009-1-1.tif")));
+        Assert.True(File.Exists(Path.Combine(destinationRoot, "B31009", "B31009-1", "B31009-1-2.tif")));
+        Assert.Contains(
+            Directory.EnumerateDirectories(Path.Combine(destinationRoot, "_processed")),
+            path => path.Contains("B31485-8-op-1"));
+        Assert.Equal(rollFolder, result.Manifest.SourceDir);
+    }
+
+    [Fact]
+    public void SourceRootWithMultipleRollSubfoldersRefusesToGuess()
+    {
+        using var workspace = new TempWorkspace();
+        var sourceRoot = workspace.CreateSource("Target");
+        var firstRollFolder = Path.Combine(sourceRoot, "B31485-8");
+        var secondRollFolder = Path.Combine(sourceRoot, "B31485-9");
+        var destinationRoot = workspace.CreateDestination();
+        workspace.WriteFile(firstRollFolder, "frame001.tif", "image-one");
+        workspace.WriteFile(secondRollFolder, "frame001.tif", "image-two");
+
+        var processor = workspace.CreateProcessor(sourceRoot, destinationRoot);
+        var exception = Assert.Throws<InvalidOperationException>(() => processor.Process(workspace.CreateRequest()));
+
+        Assert.Contains("multiple candidate roll folders", exception.Message);
+        Assert.True(Directory.Exists(sourceRoot));
+        Assert.True(Directory.Exists(firstRollFolder));
+        Assert.True(Directory.Exists(secondRollFolder));
+        Assert.False(Directory.Exists(Path.Combine(destinationRoot, "_processed")));
+    }
+
     private sealed class TempWorkspace : IDisposable
     {
         public string Root { get; } = Path.Combine(Path.GetTempPath(), $"twincheck-agent-tests-{Guid.NewGuid():N}");

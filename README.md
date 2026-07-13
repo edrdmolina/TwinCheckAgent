@@ -92,6 +92,8 @@ The GUI writes this machine's local agent config to:
 
 Use the GUI to select the scanner source folder and destination folder, then save the active profile. The API reloads this local config on the next request.
 
+The source folder can be either the exact roll folder containing images or a source root with exactly one roll subfolder. If multiple roll subfolders are present, the agent refuses to guess and asks for the exact folder.
+
 Run tests:
 
 ```bash

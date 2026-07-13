@@ -40,6 +40,8 @@ public sealed class ScanProcessor(AgentConfigProvider configProvider, OperationS
             throw new DirectoryNotFoundException($"Source directory does not exist: {sourceDir}");
         }
 
+        sourceDir = ResolveSourceDirectory(sourceDir);
+
         Directory.CreateDirectory(destinationRoot);
         if (!FileSystemSafety.CanWriteToDirectory(destinationRoot))
         {
@@ -252,6 +254,38 @@ public sealed class ScanProcessor(AgentConfigProvider configProvider, OperationS
 
     private static string BuildFinalDirectory(string destinationRoot, string orderNumber, string rollNumber) =>
         Path.Combine(destinationRoot, orderNumber, $"{orderNumber}-{rollNumber}");
+
+    private static string ResolveSourceDirectory(string configuredSourceDir)
+    {
+        var topLevelFiles = Directory.EnumerateFiles(configuredSourceDir).ToArray();
+        if (topLevelFiles.Length > 0)
+        {
+            return configuredSourceDir;
+        }
+
+        var candidateDirs = Directory.EnumerateDirectories(configuredSourceDir)
+            .Select(path => new
+            {
+                Path = path,
+                ImageCount = Directory.EnumerateFiles(path).Count(FileSystemSafety.IsImageFile)
+            })
+            .Where(candidate => candidate.ImageCount > 0)
+            .OrderBy(candidate => candidate.Path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (candidateDirs.Length == 1)
+        {
+            return candidateDirs[0].Path;
+        }
+
+        if (candidateDirs.Length > 1)
+        {
+            var names = string.Join(", ", candidateDirs.Select(candidate => Path.GetFileName(candidate.Path)));
+            throw new InvalidOperationException($"Source root contains multiple candidate roll folders. Select the exact roll folder in the agent GUI before processing: {names}");
+        }
+
+        throw new InvalidOperationException($"Source directory contains no image files: {configuredSourceDir}");
+    }
 
     private static void ArchiveSourceFolder(string sourceDir, string destinationRoot, string idempotencyKey)
     {
