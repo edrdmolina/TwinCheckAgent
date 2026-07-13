@@ -164,13 +164,42 @@ public sealed class ScanProcessorTests
         workspace.WriteFile(secondRollFolder, "frame001.tif", "image-two");
 
         var processor = workspace.CreateProcessor(sourceRoot, destinationRoot);
-        var exception = Assert.Throws<InvalidOperationException>(() => processor.Process(workspace.CreateRequest()));
+        var exception = Assert.Throws<MultipleSourceCandidatesException>(() => processor.Process(workspace.CreateRequest()));
 
         Assert.Contains("multiple candidate roll folders", exception.Message);
         Assert.True(Directory.Exists(sourceRoot));
         Assert.True(Directory.Exists(firstRollFolder));
         Assert.True(Directory.Exists(secondRollFolder));
         Assert.False(Directory.Exists(Path.Combine(destinationRoot, "_processed")));
+    }
+
+    [Fact]
+    public void CandidateServiceListsRollSubfoldersWithImageCounts()
+    {
+        using var workspace = new TempWorkspace();
+        var sourceRoot = workspace.CreateSource("Target");
+        var firstRollFolder = Path.Combine(sourceRoot, "B31485-8");
+        var secondRollFolder = Path.Combine(sourceRoot, "B31485-9");
+        var destinationRoot = workspace.CreateDestination();
+        workspace.WriteFile(firstRollFolder, "frame001.tif", "image-one");
+        workspace.WriteFile(firstRollFolder, "frame002.tif", "image-two");
+        workspace.WriteFile(secondRollFolder, "frame001.tif", "image-three");
+        workspace.WriteFile(secondRollFolder, "notes.txt", "not counted");
+
+        var service = new SourceCandidateService(new AgentConfigProvider(workspace.CreateConfig(sourceRoot, destinationRoot)));
+        var candidates = service.GetCandidates("dev-profile", null);
+
+        Assert.Equal(2, candidates.Count);
+        Assert.Contains(candidates, candidate =>
+            candidate.Name == "B31485-8"
+            && candidate.Path == firstRollFolder
+            && candidate.ImageCount == 2
+            && !candidate.IsConfiguredRoot);
+        Assert.Contains(candidates, candidate =>
+            candidate.Name == "B31485-9"
+            && candidate.Path == secondRollFolder
+            && candidate.ImageCount == 1
+            && !candidate.IsConfiguredRoot);
     }
 
     private sealed class TempWorkspace : IDisposable

@@ -281,7 +281,9 @@ public sealed class ScanProcessor(AgentConfigProvider configProvider, OperationS
         if (candidateDirs.Length > 1)
         {
             var names = string.Join(", ", candidateDirs.Select(candidate => Path.GetFileName(candidate.Path)));
-            throw new InvalidOperationException($"Source root contains multiple candidate roll folders. Select the exact roll folder in the agent GUI before processing: {names}");
+            throw new MultipleSourceCandidatesException(
+                configuredSourceDir,
+                $"Source root contains multiple candidate roll folders. Select the exact roll folder before processing: {names}");
         }
 
         throw new InvalidOperationException($"Source directory contains no image files: {configuredSourceDir}");

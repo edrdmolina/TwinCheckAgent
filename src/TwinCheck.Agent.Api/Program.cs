@@ -12,6 +12,7 @@ builder.Services.AddSingleton(new AgentConfigProvider(configuredAgentConfig));
 builder.Services.AddSingleton<OperationStore>();
 builder.Services.AddSingleton<ScanProcessor>();
 builder.Services.AddSingleton<HealthService>();
+builder.Services.AddSingleton<SourceCandidateService>();
 
 var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
     ?? ["https://twin-checkn-2b61c265fe70.herokuapp.com"];
@@ -103,11 +104,40 @@ app.MapGet("/api/scan/config", (AgentConfigProvider configProvider) =>
     });
 });
 
+app.MapGet("/api/scan/candidates", (HttpRequest request, SourceCandidateService candidateService) =>
+{
+    try
+    {
+        var profileId = request.Query["profileId"].ToString();
+        var root = request.Query["root"].ToString();
+        var candidates = candidateService.GetCandidates(
+            string.IsNullOrWhiteSpace(profileId) ? null : profileId,
+            string.IsNullOrWhiteSpace(root) ? null : root);
+
+        return Results.Ok(new { ok = true, candidates });
+    }
+    catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
+    {
+        return Results.BadRequest(new { ok = false, error = exception.Message });
+    }
+});
+
 app.MapPost("/api/scan/process", (ProcessScanRequest request, ScanProcessor processor) =>
 {
     try
     {
         return Results.Ok(processor.Process(request));
+    }
+    catch (MultipleSourceCandidatesException exception)
+    {
+        return Results.BadRequest(new
+        {
+            ok = false,
+            code = "multiple-source-candidates",
+            error = exception.Message,
+            sourceDir = exception.SourceDir,
+            profileId = request.ProfileId,
+        });
     }
     catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
     {
