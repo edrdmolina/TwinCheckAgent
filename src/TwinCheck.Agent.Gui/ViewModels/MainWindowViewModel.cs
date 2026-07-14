@@ -66,11 +66,6 @@ public class MainWindowViewModel : ViewModelBase
     public string ProfileId
     {
         get => SelectedProfile?.Id ?? "";
-        set
-        {
-            if (SelectedProfile is null) return;
-            SelectedProfile.Id = value;
-        }
     }
 
     public string ProfileName
@@ -248,7 +243,7 @@ public class MainWindowViewModel : ViewModelBase
 
     public void AddProfile()
     {
-        var id = $"scanner-{Profiles.Count + 1}";
+        var id = NextProfileId();
         var profile = new ProfileEditor
         {
             Id = id,
@@ -264,6 +259,17 @@ public class MainWindowViewModel : ViewModelBase
         };
         Profiles.Add(profile);
         SelectedProfile = profile;
+    }
+
+    private string NextProfileId()
+    {
+        var next = Profiles.Count + 1;
+        while (Profiles.Any(profile => string.Equals(profile.Id, $"scanner-{next}", StringComparison.OrdinalIgnoreCase)))
+        {
+            next++;
+        }
+
+        return $"scanner-{next}";
     }
 
     public void DeleteSelectedProfile()
