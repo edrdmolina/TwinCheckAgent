@@ -41,24 +41,53 @@
 
             <Border Padding="16" BorderBrush="#D8D8D8" BorderThickness="1" CornerRadius="6">
                 <StackPanel Spacing="14">
-                    <TextBlock Text="Active scanner profile" FontSize="16" FontWeight="SemiBold"/>
+                    <DockPanel>
+                        <TextBlock Text="Scanner profiles" FontSize="16" FontWeight="SemiBold" DockPanel.Dock="Left"/>
+                        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                            <Button Content="Add profile" Click="AddProfile_Click"/>
+                            <Button Content="Delete profile" Click="DeleteProfile_Click"/>
+                        </StackPanel>
+                    </DockPanel>
 
-                    <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
+                    <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
                           ColumnDefinitions="160,*">
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Agent name" FontWeight="SemiBold"/>
                         <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding AgentName, Mode=TwoWay}"/>
 
                         <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,12,0,0" Text="API key" FontWeight="SemiBold"/>
-                        <TextBox Grid.Row="1" Grid.Column="1" Margin="0,12,0,0" Text="{Binding ApiKey, Mode=TwoWay}"/>
+                        <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,12,0,0" Orientation="Horizontal" Spacing="8">
+                            <TextBox Width="420" PasswordChar="•" Text="{Binding ApiKey, Mode=TwoWay}"/>
+                            <Button Content="Generate" Click="GenerateApiKey_Click"/>
+                        </StackPanel>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,12,0,0" Text="Profile ID" FontWeight="SemiBold"/>
-                        <TextBox Grid.Row="2" Grid.Column="1" Margin="0,12,0,0" Text="{Binding ProfileId, Mode=TwoWay}"/>
+                        <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,12,0,0" Text="Selected profile" FontWeight="SemiBold"/>
+                        <ComboBox Grid.Row="2" Grid.Column="1" Margin="0,12,0,0"
+                                  Items="{Binding Profiles}"
+                                  SelectedItem="{Binding SelectedProfile, Mode=TwoWay}"/>
 
-                        <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,12,0,0" Text="Profile name" FontWeight="SemiBold"/>
-                        <TextBox Grid.Row="3" Grid.Column="1" Margin="0,12,0,0" Text="{Binding ProfileName, Mode=TwoWay}"/>
+                        <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,12,0,0" Text="Profile ID" FontWeight="SemiBold"/>
+                        <TextBox Grid.Row="3" Grid.Column="1" Margin="0,12,0,0" Text="{Binding ProfileId, Mode=TwoWay}"/>
 
-                        <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,12,0,0" Text="Naming pattern" FontWeight="SemiBold"/>
-                        <TextBox Grid.Row="4" Grid.Column="1" Margin="0,12,0,0" Text="{Binding NamingPattern, Mode=TwoWay}"/>
+                        <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,12,0,0" Text="Profile name" FontWeight="SemiBold"/>
+                        <TextBox Grid.Row="4" Grid.Column="1" Margin="0,12,0,0" Text="{Binding ProfileName, Mode=TwoWay}"/>
+
+                        <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,12,0,0" Text="Scanner mode" FontWeight="SemiBold"/>
+                        <TextBox Grid.Row="5" Grid.Column="1" Margin="0,12,0,0" Watermark="frontier-folder or noritsu-daily-watch" Text="{Binding ScannerMode, Mode=TwoWay}"/>
+
+                        <TextBlock Grid.Row="6" Grid.Column="0" Margin="0,12,0,0" Text="Naming pattern" FontWeight="SemiBold"/>
+                        <TextBox Grid.Row="6" Grid.Column="1" Margin="0,12,0,0" Text="{Binding NamingPattern, Mode=TwoWay}"/>
+
+                        <TextBlock Grid.Row="7" Grid.Column="0" Margin="0,12,0,0" Text="Weekly folders" FontWeight="SemiBold"/>
+                        <CheckBox Grid.Row="7" Grid.Column="1" Margin="0,12,0,0" IsChecked="{Binding WeeklyDestination, Mode=TwoWay}" Content="Use week/order/roll destination structure"/>
+
+                        <TextBlock Grid.Row="8" Grid.Column="0" Margin="0,12,0,0" Text="Settle stable sec" FontWeight="SemiBold"/>
+                        <NumericUpDown Grid.Row="8" Grid.Column="1" Margin="0,12,0,0" Minimum="0" Maximum="3600" Value="{Binding SettleStableSeconds, Mode=TwoWay}"/>
+
+                        <TextBlock Grid.Row="9" Grid.Column="0" Margin="0,12,0,0" Text="Settle timeout sec" FontWeight="SemiBold"/>
+                        <NumericUpDown Grid.Row="9" Grid.Column="1" Margin="0,12,0,0" Minimum="1" Maximum="7200" Value="{Binding SettleTimeoutSeconds, Mode=TwoWay}"/>
+
+                        <TextBlock Grid.Row="10" Grid.Column="0" Margin="0,12,0,0" Text="Settle poll sec" FontWeight="SemiBold"/>
+                        <NumericUpDown Grid.Row="10" Grid.Column="1" Margin="0,12,0,0" Minimum="1" Maximum="300" Value="{Binding SettlePollSeconds, Mode=TwoWay}"/>
                     </Grid>
                 </StackPanel>
             </Border>
@@ -85,7 +114,7 @@
 
             <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Right">
                 <Button Content="Reload" Click="Reload_Click"/>
-                <Button Content="Save profile" Click="Save_Click"/>
+                <Button Content="Save profiles" Click="Save_Click"/>
             </StackPanel>
         </StackPanel>
     </ScrollViewer>

@@ -47,6 +47,30 @@ namespace TwinCheck.Agent.Gui.Views
             }
         }
 
+        private void AddProfile_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.AddProfile();
+            }
+        }
+
+        private void DeleteProfile_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.DeleteSelectedProfile();
+            }
+        }
+
+        private void GenerateApiKey_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.GenerateApiKey();
+            }
+        }
+
         private async System.Threading.Tasks.Task<string?> PickFolder(string title, string currentPath)
         {
             var dialog = new OpenFolderDialog

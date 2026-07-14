@@ -11,8 +11,10 @@ var configuredAgentConfig = builder.Configuration.GetSection("Agent").Get<AgentC
 builder.Services.AddSingleton(new AgentConfigProvider(configuredAgentConfig));
 builder.Services.AddSingleton<OperationStore>();
 builder.Services.AddSingleton<ScanProcessor>();
-builder.Services.AddSingleton<HealthService>();
 builder.Services.AddSingleton<SourceCandidateService>();
+builder.Services.AddSingleton<ScanWatchService>();
+builder.Services.AddSingleton<RollbackService>();
+builder.Services.AddSingleton<HealthService>();
 
 var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
     ?? ["https://twin-checkn-2b61c265fe70.herokuapp.com"];
@@ -74,7 +76,12 @@ app.MapGet("/", () => Results.Ok(new
     {
         "/api/scan/health",
         "/api/scan/config",
-        "/api/scan/process"
+        "/api/scan/candidates",
+        "/api/scan/watch/start",
+        "/api/scan/process",
+        "/api/scan/manifests",
+        "/api/scan/manifest",
+        "/api/scan/rollback"
     }
 }));
 
@@ -96,9 +103,14 @@ app.MapGet("/api/scan/config", (AgentConfigProvider configProvider) =>
         {
             profile.Id,
             profile.Name,
+            profile.ScannerMode,
             profile.SourceDir,
             profile.DestinationDir,
             profile.NamingPattern,
+            profile.WeeklyDestination,
+            profile.SettleStableSeconds,
+            profile.SettleTimeoutSeconds,
+            profile.SettlePollSeconds,
             profile.Options
         })
     });
@@ -110,11 +122,99 @@ app.MapGet("/api/scan/candidates", (HttpRequest request, SourceCandidateService 
     {
         var profileId = request.Query["profileId"].ToString();
         var root = request.Query["root"].ToString();
+        var orderNumber = request.Query["orderNumber"].ToString();
+        var rollNumber = request.Query["rollNumber"].ToString();
+        var scanKind = request.Query["scanKind"].ToString();
+        var rescanNumberValue = request.Query["rescanNumber"].ToString();
+        var rescanNumber = int.TryParse(rescanNumberValue, out var parsedRescanNumber) ? parsedRescanNumber : (int?)null;
         var candidates = candidateService.GetCandidates(
             string.IsNullOrWhiteSpace(profileId) ? null : profileId,
-            string.IsNullOrWhiteSpace(root) ? null : root);
+            string.IsNullOrWhiteSpace(root) ? null : root,
+            string.IsNullOrWhiteSpace(orderNumber) ? null : orderNumber,
+            string.IsNullOrWhiteSpace(rollNumber) ? null : rollNumber,
+            string.IsNullOrWhiteSpace(scanKind) ? null : scanKind,
+            rescanNumber);
 
         return Results.Ok(new { ok = true, candidates });
+    }
+    catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
+    {
+        return Results.BadRequest(new { ok = false, error = exception.Message });
+    }
+});
+
+app.MapPost("/api/scan/watch/start", (StartScanWatchRequest request, ScanWatchService watchService) =>
+{
+    try
+    {
+        return Results.Ok(new { ok = true, watch = watchService.Start(request) });
+    }
+    catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
+    {
+        return Results.BadRequest(new { ok = false, error = exception.Message });
+    }
+});
+
+app.MapGet("/api/scan/watch/{watchId}", (string watchId, ScanWatchService watchService) =>
+{
+    try
+    {
+        return Results.Ok(new { ok = true, watch = watchService.Get(watchId) });
+    }
+    catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
+    {
+        return Results.BadRequest(new { ok = false, error = exception.Message });
+    }
+});
+
+app.MapPost("/api/scan/watch/{watchId}/cancel", (string watchId, ScanWatchService watchService) =>
+{
+    try
+    {
+        return Results.Ok(new { ok = true, watch = watchService.Cancel(watchId) });
+    }
+    catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
+    {
+        return Results.BadRequest(new { ok = false, error = exception.Message });
+    }
+});
+
+app.MapGet("/api/scan/manifests", (AgentConfigProvider configProvider, OperationStore operationStore) =>
+{
+    try
+    {
+        return Results.Ok(new { ok = true, manifests = operationStore.ListManifests(configProvider.Current).Take(100) });
+    }
+    catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
+    {
+        return Results.BadRequest(new { ok = false, error = exception.Message });
+    }
+});
+
+app.MapGet("/api/scan/manifest", (HttpRequest request, AgentConfigProvider configProvider, OperationStore operationStore) =>
+{
+    try
+    {
+        var manifestPath = request.Query["path"].ToString();
+        if (string.IsNullOrWhiteSpace(manifestPath))
+        {
+            return Results.BadRequest(new { ok = false, error = "Manifest path is required." });
+        }
+
+        var safePath = FileSystemSafety.EnsureInsideAnyRoot(manifestPath, configProvider.Current.AllowedDestinationRoots, "manifest");
+        return Results.Ok(new { ok = true, manifest = operationStore.ReadManifest(safePath), manifestPath = safePath });
+    }
+    catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
+    {
+        return Results.BadRequest(new { ok = false, error = exception.Message });
+    }
+});
+
+app.MapPost("/api/scan/rollback", (RollbackScanRequest request, RollbackService rollbackService) =>
+{
+    try
+    {
+        return Results.Ok(rollbackService.Rollback(request));
     }
     catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
     {

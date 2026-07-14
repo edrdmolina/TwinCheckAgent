@@ -10,15 +10,18 @@ public sealed record AgentHealth(
     string? ActiveProfileId,
     bool NasMounted,
     IReadOnlyList<string> WritableRoots,
+    IReadOnlyList<ScanWatchState> ActiveWatches,
     OperationSummary? LastOperation,
     IReadOnlyList<string> Warnings);
 
 public sealed record ScannerProfileHealth(
     string Id,
     string Name,
+    string ScannerMode,
     bool SourceExists,
     bool DestinationExists,
-    bool DestinationWritable);
+    bool DestinationWritable,
+    int CandidateCount);
 
 public sealed record OperationSummary(
     string IdempotencyKey,
@@ -28,10 +31,10 @@ public sealed record OperationSummary(
     int ImageCount,
     bool Ok);
 
-public sealed class HealthService(AgentConfigProvider configProvider, OperationStore operationStore)
+public sealed class HealthService(AgentConfigProvider configProvider, OperationStore operationStore, ScanWatchService? watchService = null)
 {
     public HealthService(AgentConfig config, OperationStore operationStore)
-        : this(new AgentConfigProvider(config), operationStore)
+        : this(new AgentConfigProvider(config), operationStore, null)
     {
     }
 
@@ -42,9 +45,11 @@ public sealed class HealthService(AgentConfigProvider configProvider, OperationS
             .Select(profile => new ScannerProfileHealth(
                 profile.Id,
                 profile.Name,
-                Directory.Exists(profile.SourceDir),
+                profile.ScannerMode,
+                Directory.Exists(SourceCandidateService.ResolveCandidateRoot(profile)),
                 Directory.Exists(profile.DestinationDir),
-                Directory.Exists(profile.DestinationDir) && FileSystemSafety.CanWriteToDirectory(profile.DestinationDir)))
+                Directory.Exists(profile.DestinationDir) && FileSystemSafety.CanWriteToDirectory(profile.DestinationDir),
+                CountCandidates(profile)))
             .ToArray();
 
         var writableRoots = config.AllowedDestinationRoots
@@ -52,9 +57,9 @@ public sealed class HealthService(AgentConfigProvider configProvider, OperationS
             .ToArray();
 
         var warnings = new List<string>();
-        if (config.ApiKey == "change-me")
+        if (config.ApiKey is "change-me" or "dev-local-key")
         {
-            warnings.Add("Default API key is still configured.");
+            warnings.Add("Default API key is still configured. Generate a unique machine key before production use.");
         }
 
         foreach (var profile in profileHealth.Where(profile => !profile.SourceExists || !profile.DestinationWritable))
@@ -72,7 +77,21 @@ public sealed class HealthService(AgentConfigProvider configProvider, OperationS
             ActiveProfileId: config.ActiveProfileId,
             NasMounted: writableRoots.Length > 0,
             WritableRoots: writableRoots,
+            ActiveWatches: watchService?.ListActive() ?? [],
             LastOperation: operationStore.GetLastOperation(),
             Warnings: warnings);
+    }
+
+    private static int CountCandidates(ScannerProfile profile)
+    {
+        var root = SourceCandidateService.ResolveCandidateRoot(profile);
+        if (!Directory.Exists(root))
+        {
+            return 0;
+        }
+
+        var count = ScannerFileSystem.CountImageFiles(root) > 0 ? 1 : 0;
+        count += Directory.EnumerateDirectories(root).Count(path => ScannerFileSystem.CountImageFiles(path) > 0);
+        return count;
     }
 }

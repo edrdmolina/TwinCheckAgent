@@ -17,13 +17,23 @@ public sealed class ScanProcessor(AgentConfigProvider configProvider, OperationS
 
         var profile = config.Profiles.SingleOrDefault(profile => profile.Id == request.ProfileId)
             ?? throw new InvalidOperationException($"Unknown scanner profile '{request.ProfileId}'.");
+        if (!ScannerModes.IsValid(profile.ScannerMode))
+        {
+            throw new InvalidOperationException($"Unknown scanner mode '{profile.ScannerMode}' for profile '{profile.Id}'.");
+        }
+
+        var scanKind = string.IsNullOrWhiteSpace(request.ScanKind) ? ScanKinds.Original : request.ScanKind;
+        if (!ScanKinds.IsValid(scanKind))
+        {
+            throw new InvalidOperationException($"Unknown scan kind '{request.ScanKind}'.");
+        }
 
         var destinationRoot = FileSystemSafety.EnsureInsideAnyRoot(
             request.DestinationDir ?? profile.DestinationDir,
             config.AllowedDestinationRoots,
             "destination");
 
-        var finalDir = BuildFinalDirectory(destinationRoot, request.OrderNumber, request.RollNumber);
+        var finalDir = BuildFinalDirectory(destinationRoot, request.OrderNumber, request.RollNumber, profile.WeeklyDestination, scanKind, request.RescanNumber);
         var existingManifest = operationStore.TryReadManifest(finalDir, request.IdempotencyKey);
         if (existingManifest is not null && !request.DryRun)
         {
@@ -49,11 +59,9 @@ public sealed class ScanProcessor(AgentConfigProvider configProvider, OperationS
         }
 
         var startedAt = DateTimeOffset.UtcNow;
-        var files = Directory.EnumerateFiles(sourceDir)
-            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        var files = ScannerFileSystem.GetFilesNatural(sourceDir);
 
-        var imageFiles = files.Where(FileSystemSafety.IsImageFile).ToArray();
+        var imageFiles = ScannerFileSystem.GetImageFilesNatural(sourceDir);
         var reviewFiles = files.Except(imageFiles).ToArray();
 
         var manifests = new List<ScanFileManifest>();
@@ -207,6 +215,8 @@ public sealed class ScanProcessor(AgentConfigProvider configProvider, OperationS
             SourceDir = sourceDir,
             DestinationDir = destinationRoot,
             FinalDir = finalDir,
+            ScanKind = string.IsNullOrWhiteSpace(request.ScanKind) ? ScanKinds.Original : request.ScanKind,
+            RescanNumber = request.RescanNumber,
             DryRun = dryRun,
             Ok = files.All(file => file.Outcome != ScanFileOutcome.Failed),
             StartedAt = startedAt,
@@ -252,8 +262,57 @@ public sealed class ScanProcessor(AgentConfigProvider configProvider, OperationS
         throw new IOException($"Could not resolve a collision-free destination for '{candidate}'.");
     }
 
-    private static string BuildFinalDirectory(string destinationRoot, string orderNumber, string rollNumber) =>
-        Path.Combine(destinationRoot, orderNumber, $"{orderNumber}-{rollNumber}");
+    public static string BuildFinalDirectoryPreview(
+        string destinationRoot,
+        string orderNumber,
+        string rollNumber,
+        bool weeklyDestination = true,
+        string scanKind = ScanKinds.Original,
+        int? rescanNumber = null) =>
+        BuildFinalDirectory(destinationRoot, orderNumber, rollNumber, weeklyDestination, scanKind, rescanNumber);
+
+    private static string BuildFinalDirectory(
+        string destinationRoot,
+        string orderNumber,
+        string rollNumber,
+        bool weeklyDestination,
+        string scanKind,
+        int? rescanNumber)
+    {
+        var orderRoot = weeklyDestination
+            ? Path.Combine(destinationRoot, ScannerFileSystem.GetWeekFolder(), orderNumber)
+            : Path.Combine(destinationRoot, orderNumber);
+        var folderName = $"{orderNumber}-{rollNumber}";
+        if (string.Equals(scanKind, ScanKinds.Rescan, StringComparison.OrdinalIgnoreCase))
+        {
+            folderName = $"{folderName}-rescan-{ResolveRescanNumber(orderRoot, folderName, rescanNumber)}";
+        }
+
+        return Path.Combine(orderRoot, folderName);
+    }
+
+    private static int ResolveRescanNumber(string orderRoot, string folderName, int? requested)
+    {
+        if (requested is >= 2)
+        {
+            return requested.Value;
+        }
+
+        if (!Directory.Exists(orderRoot))
+        {
+            return 2;
+        }
+
+        var prefix = $"{folderName}-rescan-";
+        var max = Directory.EnumerateDirectories(orderRoot, $"{prefix}*")
+            .Select(path => Path.GetFileName(Path.TrimEndingDirectorySeparator(path)))
+            .Select(name => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? name[prefix.Length..] : "")
+            .Select(value => int.TryParse(value, out var number) ? number : 0)
+            .DefaultIfEmpty(1)
+            .Max();
+
+        return Math.Max(2, max + 1);
+    }
 
     private static string ResolveSourceDirectory(string configuredSourceDir)
     {

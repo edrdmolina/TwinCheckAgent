@@ -5,7 +5,9 @@ public sealed record SourceCandidate(
     string Name,
     int ImageCount,
     DateTimeOffset ModifiedAt,
-    bool IsConfiguredRoot);
+    bool IsConfiguredRoot,
+    string ScannerMode,
+    string? DestinationPreview);
 
 public sealed class MultipleSourceCandidatesException(string sourceDir, string message) : InvalidOperationException(message)
 {
@@ -14,12 +16,23 @@ public sealed class MultipleSourceCandidatesException(string sourceDir, string m
 
 public sealed class SourceCandidateService(AgentConfigProvider configProvider)
 {
-    public IReadOnlyList<SourceCandidate> GetCandidates(string? profileId, string? root)
+    public IReadOnlyList<SourceCandidate> GetCandidates(
+        string? profileId,
+        string? root,
+        string? orderNumber = null,
+        string? rollNumber = null,
+        string? scanKind = null,
+        int? rescanNumber = null)
     {
         var config = configProvider.Current;
         var profile = ResolveProfile(config, profileId);
-        var configuredRoot = root ?? profile.SourceDir;
+        var configuredRoot = root ?? ResolveCandidateRoot(profile);
         var sourceRoot = FileSystemSafety.EnsureInsideAnyRoot(configuredRoot, config.AllowedSourceRoots, "source");
+        if (string.Equals(profile.ScannerMode, ScannerModes.NoritsuDailyWatch, StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(root))
+        {
+            Directory.CreateDirectory(sourceRoot);
+        }
 
         if (!Directory.Exists(sourceRoot))
         {
@@ -27,30 +40,71 @@ public sealed class SourceCandidateService(AgentConfigProvider configProvider)
         }
 
         var candidates = new List<SourceCandidate>();
-        var rootImageCount = CountImageFiles(sourceRoot);
+        var rootImageCount = ScannerFileSystem.CountImageFiles(sourceRoot);
         if (rootImageCount > 0)
         {
-            candidates.Add(new SourceCandidate(
+            candidates.Add(CreateCandidate(
+                profile,
                 sourceRoot,
-                Path.GetFileName(Path.TrimEndingDirectorySeparator(sourceRoot)),
                 rootImageCount,
-                GetCandidateModifiedAt(sourceRoot),
-                true));
+                true,
+                orderNumber,
+                rollNumber,
+                scanKind,
+                rescanNumber));
         }
 
         candidates.AddRange(Directory.EnumerateDirectories(sourceRoot)
-            .Select(path => new SourceCandidate(
+            .Select(path => CreateCandidate(
+                profile,
                 path,
-                Path.GetFileName(Path.TrimEndingDirectorySeparator(path)),
-                CountImageFiles(path),
-                GetCandidateModifiedAt(path),
-                false))
+                ScannerFileSystem.CountImageFiles(path),
+                false,
+                orderNumber,
+                rollNumber,
+                scanKind,
+                rescanNumber))
             .Where(candidate => candidate.ImageCount > 0));
 
         return candidates
             .OrderByDescending(candidate => candidate.ModifiedAt)
             .ThenBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    public static string ResolveCandidateRoot(ScannerProfile profile) =>
+        string.Equals(profile.ScannerMode, ScannerModes.NoritsuDailyWatch, StringComparison.OrdinalIgnoreCase)
+            ? ScannerFileSystem.GetNoritsuDailyFolder(profile.SourceDir)
+            : profile.SourceDir;
+
+    private static SourceCandidate CreateCandidate(
+        ScannerProfile profile,
+        string path,
+        int imageCount,
+        bool isConfiguredRoot,
+        string? orderNumber,
+        string? rollNumber,
+        string? scanKind,
+        int? rescanNumber)
+    {
+        var destinationPreview = !string.IsNullOrWhiteSpace(orderNumber) && !string.IsNullOrWhiteSpace(rollNumber)
+            ? ScanProcessor.BuildFinalDirectoryPreview(
+                profile.DestinationDir,
+                orderNumber,
+                rollNumber,
+                profile.WeeklyDestination,
+                scanKind ?? ScanKinds.Original,
+                rescanNumber)
+            : null;
+
+        return new SourceCandidate(
+            path,
+            Path.GetFileName(Path.TrimEndingDirectorySeparator(path)),
+            imageCount,
+            ScannerFileSystem.GetNewestImageModifiedAt(path),
+            isConfiguredRoot,
+            profile.ScannerMode,
+            destinationPreview);
     }
 
     private static ScannerProfile ResolveProfile(AgentConfig config, string? profileId)
@@ -74,17 +128,4 @@ public sealed class SourceCandidateService(AgentConfigProvider configProvider)
             ?? throw new InvalidOperationException("No scanner profiles are configured.");
     }
 
-    private static int CountImageFiles(string directory) =>
-        Directory.EnumerateFiles(directory).Count(FileSystemSafety.IsImageFile);
-
-    private static DateTimeOffset GetCandidateModifiedAt(string directory)
-    {
-        var newestImage = Directory.EnumerateFiles(directory)
-            .Where(FileSystemSafety.IsImageFile)
-            .Select(File.GetLastWriteTimeUtc)
-            .DefaultIfEmpty(Directory.GetLastWriteTimeUtc(directory))
-            .Max();
-
-        return new DateTimeOffset(newestImage, TimeSpan.Zero);
-    }
 }

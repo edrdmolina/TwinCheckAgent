@@ -24,10 +24,10 @@ The processor currently implements these rules:
 - Archive the original source folder under `_processed/` only after copy/verify succeeds.
 - Write a per-operation JSON manifest beside the committed roll folder.
 
-Destination folders currently use:
+Destination folders use:
 
 ```text
-<destinationDir>/<orderNumber>/<orderNumber>-<rollNumber>/
+<destinationDir>/<week-MM-DD-YY>/<orderNumber>/<orderNumber>-<rollNumber>/
 ```
 
 File names default to:
@@ -92,7 +92,9 @@ The GUI writes this machine's local agent config to:
 
 Use the GUI to select the scanner source folder and destination folder, then save the active profile. The API reloads this local config on the next request.
 
-The source folder can be either the exact roll folder containing images or a source root with exactly one roll subfolder. If multiple roll subfolders are present, the agent refuses to guess and asks for the exact folder.
+Profiles support Frontier folder processing and Noritsu daily-folder watching. The source folder can be either the exact roll folder containing images or a source root with roll subfolders. If multiple roll subfolders are present, the agent refuses to guess and asks for the exact folder.
+
+See [docs/OPERATIONS.md](docs/OPERATIONS.md) for profile setup, browser setup, Frontier/Noritsu workflows, rollback behavior, troubleshooting, and Ubuntu autostart.
 
 Run tests:
 
@@ -103,8 +105,6 @@ Run tests:
 ## Near-Term Work
 
 - Bind API launch settings to `https://localhost:3625` with local certificate guidance.
-- Add GUI polling for `/api/scan/health` and recent manifests.
 - Add BMP to TIFF and EXIF-on-copy processing.
-- Add candidate folder endpoint.
-- Add service/autostart installers for Linux, Windows, and macOS.
+- Add packaged installers for Linux, Windows, and macOS.
 - Upgrade the Avalonia template packages to the current supported line.

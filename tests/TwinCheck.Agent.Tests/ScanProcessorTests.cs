@@ -18,11 +18,11 @@ public sealed class ScanProcessorTests
 
         Assert.True(result.Ok);
         Assert.Equal(1, result.ImageCount);
-        Assert.Equal(Path.Combine(destinationRoot, "B31009", "B31009-1"), result.Manifest.FinalDir);
-        Assert.Contains(result.Manifest.Files, file => file.DestinationPath == Path.Combine(destinationRoot, "B31009", "B31009-1", "B31009-1-1.jpg"));
+        Assert.Equal(workspace.FinalDir(destinationRoot), result.Manifest.FinalDir);
+        Assert.Contains(result.Manifest.Files, file => file.DestinationPath == Path.Combine(workspace.FinalDir(destinationRoot), "B31009-1-1.jpg"));
         Assert.Contains(result.Reviewed, file => file.FileName == "notes.txt");
         Assert.True(Directory.Exists(sourceDir));
-        Assert.False(Directory.Exists(Path.Combine(destinationRoot, "B31009", "B31009-1")));
+        Assert.False(Directory.Exists(workspace.FinalDir(destinationRoot)));
     }
 
     [Fact]
@@ -37,7 +37,7 @@ public sealed class ScanProcessorTests
         var processor = workspace.CreateProcessor(sourceDir, destinationRoot);
         var result = processor.Process(workspace.CreateRequest());
 
-        var finalImage = Path.Combine(destinationRoot, "B31009", "B31009-1", "B31009-1-1.jpg");
+        var finalImage = Path.Combine(workspace.FinalDir(destinationRoot), "B31009-1-1.jpg");
         var reviewFile = Path.Combine(destinationRoot, "_review", "op-1", "metadata.json");
         var processedRoot = Path.Combine(destinationRoot, "_processed");
 
@@ -47,7 +47,7 @@ public sealed class ScanProcessorTests
         Assert.True(File.Exists(reviewFile));
         Assert.False(Directory.Exists(sourceDir));
         Assert.Contains(Directory.EnumerateDirectories(processedRoot), path => path.Contains("roll-a-op-1"));
-        Assert.True(File.Exists(Path.Combine(destinationRoot, "B31009", "B31009-1", "manifest-op-1.json")));
+        Assert.True(File.Exists(Path.Combine(workspace.FinalDir(destinationRoot), "manifest-op-1.json")));
     }
 
     [Fact]
@@ -56,7 +56,7 @@ public sealed class ScanProcessorTests
         using var workspace = new TempWorkspace();
         var sourceDir = workspace.CreateSource("roll-a");
         var destinationRoot = workspace.CreateDestination();
-        var finalDir = Path.Combine(destinationRoot, "B31009", "B31009-1");
+        var finalDir = workspace.FinalDir(destinationRoot);
         Directory.CreateDirectory(finalDir);
         File.WriteAllText(Path.Combine(finalDir, "B31009-1-1.jpg"), "existing-different-image");
         workspace.WriteFile(sourceDir, "scan001.jpg", "new-image");
@@ -76,7 +76,7 @@ public sealed class ScanProcessorTests
         using var workspace = new TempWorkspace();
         var sourceDir = workspace.CreateSource("roll-a");
         var destinationRoot = workspace.CreateDestination();
-        var finalDir = Path.Combine(destinationRoot, "B31009", "B31009-1");
+        var finalDir = workspace.FinalDir(destinationRoot);
         Directory.CreateDirectory(finalDir);
         File.WriteAllText(Path.Combine(finalDir, "B31009-1-1.jpg"), "same-image");
         workspace.WriteFile(sourceDir, "scan001.jpg", "same-image");
@@ -144,8 +144,8 @@ public sealed class ScanProcessorTests
         Assert.Equal(2, result.ImageCount);
         Assert.True(Directory.Exists(sourceRoot));
         Assert.False(Directory.Exists(rollFolder));
-        Assert.True(File.Exists(Path.Combine(destinationRoot, "B31009", "B31009-1", "B31009-1-1.tif")));
-        Assert.True(File.Exists(Path.Combine(destinationRoot, "B31009", "B31009-1", "B31009-1-2.tif")));
+        Assert.True(File.Exists(Path.Combine(workspace.FinalDir(destinationRoot), "B31009-1-1.tif")));
+        Assert.True(File.Exists(Path.Combine(workspace.FinalDir(destinationRoot), "B31009-1-2.tif")));
         Assert.Contains(
             Directory.EnumerateDirectories(Path.Combine(destinationRoot, "_processed")),
             path => path.Contains("B31485-8-op-1"));
@@ -194,12 +194,72 @@ public sealed class ScanProcessorTests
             candidate.Name == "B31485-8"
             && candidate.Path == firstRollFolder
             && candidate.ImageCount == 2
-            && !candidate.IsConfiguredRoot);
+            && !candidate.IsConfiguredRoot
+            && candidate.ScannerMode == ScannerModes.FrontierFolder);
         Assert.Contains(candidates, candidate =>
             candidate.Name == "B31485-9"
             && candidate.Path == secondRollFolder
             && candidate.ImageCount == 1
             && !candidate.IsConfiguredRoot);
+    }
+
+    [Fact]
+    public void RescanWritesSiblingRescanFolder()
+    {
+        using var workspace = new TempWorkspace();
+        var sourceDir = workspace.CreateSource("roll-a");
+        var destinationRoot = workspace.CreateDestination();
+        workspace.WriteFile(sourceDir, "scan001.jpg", "image-one");
+
+        var processor = workspace.CreateProcessor(sourceDir, destinationRoot);
+        var result = processor.Process(workspace.CreateRequest(scanKind: ScanKinds.Rescan, rescanNumber: 2));
+
+        Assert.Equal(Path.Combine(destinationRoot, ScannerFileSystem.GetWeekFolder(), "B31009", "B31009-1-rescan-2"), result.Manifest.FinalDir);
+        Assert.True(File.Exists(Path.Combine(result.Manifest.FinalDir, "B31009-1-1.jpg")));
+    }
+
+    [Fact]
+    public async Task NoritsuWatchDetectsNewDailyChildFolder()
+    {
+        using var workspace = new TempWorkspace();
+        var sourceRoot = workspace.CreateSource("Noritsu");
+        var destinationRoot = workspace.CreateDestination();
+        var config = workspace.CreateConfig(sourceRoot, destinationRoot) with
+        {
+            Profiles =
+            [
+                workspace.CreateProfile(sourceRoot, destinationRoot) with
+                {
+                    ScannerMode = ScannerModes.NoritsuDailyWatch,
+                    SettleStableSeconds = 0,
+                    SettleTimeoutSeconds = 5,
+                    SettlePollSeconds = 1
+                }
+            ]
+        };
+        var service = new ScanWatchService(new AgentConfigProvider(config));
+        var watch = service.Start(new StartScanWatchRequest
+        {
+            ProfileId = "dev-profile",
+            OrderNumber = "B31009",
+            RollNumber = "1"
+        });
+
+        var rollFolder = Path.Combine(watch.WatchDir, "roll-from-scanner");
+        workspace.WriteFile(rollFolder, "frame001.tif", "image-one");
+
+        ScanWatchState state;
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        do
+        {
+            await Task.Delay(250);
+            state = service.Get(watch.WatchId);
+        } while (state.Status is not "ready" && DateTimeOffset.UtcNow < deadline);
+
+        Assert.Equal("ready", state.Status);
+        Assert.NotNull(state.Candidate);
+        Assert.Equal(1, state.Candidate.ImageCount);
+        Assert.Equal(rollFolder, state.Candidate.Path);
     }
 
     private sealed class TempWorkspace : IDisposable
@@ -224,6 +284,9 @@ public sealed class ScanProcessorTests
             Directory.CreateDirectory(path);
             return path;
         }
+
+        public string FinalDir(string destinationRoot) =>
+            Path.Combine(destinationRoot, ScannerFileSystem.GetWeekFolder(), "B31009", "B31009-1");
 
         public void WriteFile(string directory, string fileName, string contents)
         {
@@ -253,7 +316,7 @@ public sealed class ScanProcessorTests
         public ScanProcessor CreateProcessor(string sourceDir, string destinationRoot) =>
             new(CreateConfig(sourceDir, destinationRoot), new OperationStore());
 
-        public ProcessScanRequest CreateRequest(bool dryRun = false, string? sourceOverride = null) =>
+        public ProcessScanRequest CreateRequest(bool dryRun = false, string? sourceOverride = null, string scanKind = ScanKinds.Original, int? rescanNumber = null) =>
             new()
             {
                 IdempotencyKey = "op-1",
@@ -261,6 +324,8 @@ public sealed class ScanProcessorTests
                 SourceDir = sourceOverride,
                 OrderNumber = "B31009",
                 RollNumber = "1",
+                ScanKind = scanKind,
+                RescanNumber = rescanNumber,
                 DryRun = dryRun
             };
 

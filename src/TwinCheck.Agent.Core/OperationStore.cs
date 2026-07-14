@@ -13,6 +13,42 @@ public sealed class OperationStore
 
     public OperationSummary? GetLastOperation() => _lastOperation;
 
+    public IReadOnlyList<ManifestSummary> ListManifests(AgentConfig config)
+    {
+        var manifests = new List<ManifestSummary>();
+        foreach (var root in config.AllowedDestinationRoots.Where(Directory.Exists))
+        {
+            foreach (var manifestPath in Directory.EnumerateFiles(root, "manifest-*.json", SearchOption.AllDirectories))
+            {
+                try
+                {
+                    var manifest = ReadManifest(manifestPath);
+                    manifests.Add(new ManifestSummary(
+                        manifestPath,
+                        manifest.IdempotencyKey,
+                        manifest.ProfileId,
+                        manifest.OrderNumber,
+                        manifest.RollNumber,
+                        manifest.ScanKind,
+                        manifest.RescanNumber,
+                        manifest.FinalDir,
+                        manifest.CompletedAt,
+                        manifest.RolledBackAt,
+                        manifest.Files.Count(file => file.Kind == ScanFileKind.Image),
+                        manifest.Ok));
+                }
+                catch
+                {
+                    // Skip unreadable manifests; health/log endpoints should not fail because of one corrupt file.
+                }
+            }
+        }
+
+        return manifests
+            .OrderByDescending(summary => summary.CompletedAt ?? DateTimeOffset.MinValue)
+            .ToArray();
+    }
+
     public OperationManifest? TryReadManifest(string finalDir, string idempotencyKey)
     {
         var manifestPath = GetManifestPath(finalDir, idempotencyKey);
@@ -40,6 +76,22 @@ public sealed class OperationStore
         }
     }
 
+    public OperationManifest ReadManifest(string manifestPath)
+    {
+        var manifest = JsonSerializer.Deserialize<OperationManifest>(File.ReadAllText(manifestPath), _jsonOptions)
+            ?? throw new InvalidOperationException($"Manifest could not be read: {manifestPath}");
+        return manifest;
+    }
+
+    public void WriteManifestAt(string manifestPath, OperationManifest manifest)
+    {
+        File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest, _jsonOptions));
+        if (manifest.CompletedAt is not null)
+        {
+            _lastOperation = ToSummary(manifest);
+        }
+    }
+
     private static string GetManifestPath(string finalDir, string idempotencyKey)
     {
         var safeKey = string.Concat(idempotencyKey.Select(character => char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '-'));
@@ -53,5 +105,19 @@ public sealed class OperationStore
             manifest.OrderNumber,
             manifest.RollNumber,
             manifest.Files.Count(file => file.Kind == ScanFileKind.Image),
-            manifest.Ok);
+                manifest.Ok);
 }
+
+public sealed record ManifestSummary(
+    string ManifestPath,
+    string IdempotencyKey,
+    string ProfileId,
+    string OrderNumber,
+    string RollNumber,
+    string ScanKind,
+    int? RescanNumber,
+    string FinalDir,
+    DateTimeOffset? CompletedAt,
+    DateTimeOffset? RolledBackAt,
+    int ImageCount,
+    bool Ok);

@@ -9,6 +9,8 @@ public sealed record ProcessScanRequest
     public required string OrderNumber { get; init; }
     public required string RollNumber { get; init; }
     public string? Naming { get; init; }
+    public string ScanKind { get; init; } = ScanKinds.Original;
+    public int? RescanNumber { get; init; }
     public ScanOptions? Options { get; init; }
     public bool DryRun { get; init; }
 }
@@ -29,13 +31,30 @@ public sealed record OperationManifest
     public required string SourceDir { get; init; }
     public required string DestinationDir { get; init; }
     public required string FinalDir { get; init; }
+    public string ScanKind { get; init; } = ScanKinds.Original;
+    public int? RescanNumber { get; init; }
     public bool DryRun { get; init; }
     public bool Ok { get; init; }
     public DateTimeOffset StartedAt { get; init; }
     public DateTimeOffset? CompletedAt { get; init; }
+    public DateTimeOffset? RolledBackAt { get; init; }
     public IReadOnlyList<ScanFileManifest> Files { get; init; } = [];
     public IReadOnlyList<string> Warnings { get; init; } = [];
 }
+
+public sealed record RollbackScanRequest
+{
+    public required string ProfileId { get; init; }
+    public required string ManifestPath { get; init; }
+}
+
+public sealed record RollbackScanResult(
+    bool Ok,
+    string ManifestPath,
+    string SourceArchiveDir,
+    string FinalDir,
+    int RestoredFileCount,
+    IReadOnlyList<string> Warnings);
 
 public sealed record ScanFileManifest
 {
