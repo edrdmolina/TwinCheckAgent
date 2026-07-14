@@ -4,17 +4,30 @@ namespace TwinCheck.Agent.Core;
 
 public static class LocalAgentConfigStore
 {
+    public const string ConfigPathEnvironmentVariable = "TWINCHECK_AGENT_CONFIG_PATH";
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true
     };
 
-    public static string ConfigPath =>
-        Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "TwinCheck",
-            "ScanAgent",
-            "agent-config.json");
+    public static string ConfigPath
+    {
+        get
+        {
+            var configuredPath = Environment.GetEnvironmentVariable(ConfigPathEnvironmentVariable);
+            if (!string.IsNullOrWhiteSpace(configuredPath))
+            {
+                return Path.GetFullPath(configuredPath);
+            }
+
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "TwinCheck",
+                "ScanAgent",
+                "agent-config.json");
+        }
+    }
 
     public static AgentConfig LoadOrDefault(AgentConfig fallback)
     {

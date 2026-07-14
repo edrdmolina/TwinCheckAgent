@@ -2,6 +2,8 @@ namespace TwinCheck.Agent.Core;
 
 public sealed class LocalAgentLogger
 {
+    public const string LogDirectoryEnvironmentVariable = "TWINCHECK_AGENT_LOG_DIR";
+
     private readonly object gate = new();
     private readonly string logDirectory;
 
@@ -15,12 +17,23 @@ public sealed class LocalAgentLogger
         this.logDirectory = logDirectory;
     }
 
-    public static string DefaultLogDirectory =>
-        Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "TwinCheck",
-            "ScanAgent",
-            "logs");
+    public static string DefaultLogDirectory
+    {
+        get
+        {
+            var configuredPath = Environment.GetEnvironmentVariable(LogDirectoryEnvironmentVariable);
+            if (!string.IsNullOrWhiteSpace(configuredPath))
+            {
+                return Path.GetFullPath(configuredPath);
+            }
+
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "TwinCheck",
+                "ScanAgent",
+                "logs");
+        }
+    }
 
     public string LogDirectory => logDirectory;
 

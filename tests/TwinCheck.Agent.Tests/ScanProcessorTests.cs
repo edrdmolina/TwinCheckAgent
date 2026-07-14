@@ -249,6 +249,44 @@ public sealed class ScanProcessorTests
     }
 
     [Fact]
+    public void LocalAgentConfigPathCanBeOverriddenByEnvironment()
+    {
+        var original = Environment.GetEnvironmentVariable(LocalAgentConfigStore.ConfigPathEnvironmentVariable);
+        using var workspace = new TempWorkspace();
+        var configPath = Path.Combine(workspace.Root, "shared-config", "agent-config.json");
+
+        try
+        {
+            Environment.SetEnvironmentVariable(LocalAgentConfigStore.ConfigPathEnvironmentVariable, configPath);
+
+            Assert.Equal(Path.GetFullPath(configPath), LocalAgentConfigStore.ConfigPath);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(LocalAgentConfigStore.ConfigPathEnvironmentVariable, original);
+        }
+    }
+
+    [Fact]
+    public void LocalAgentLogDirectoryCanBeOverriddenByEnvironment()
+    {
+        var original = Environment.GetEnvironmentVariable(LocalAgentLogger.LogDirectoryEnvironmentVariable);
+        using var workspace = new TempWorkspace();
+        var logDir = Path.Combine(workspace.Root, "shared-logs");
+
+        try
+        {
+            Environment.SetEnvironmentVariable(LocalAgentLogger.LogDirectoryEnvironmentVariable, logDir);
+
+            Assert.Equal(Path.GetFullPath(logDir), LocalAgentLogger.DefaultLogDirectory);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(LocalAgentLogger.LogDirectoryEnvironmentVariable, original);
+        }
+    }
+
+    [Fact]
     public void DiagnosticsServiceReportsProfileReadiness()
     {
         using var workspace = new TempWorkspace();

@@ -1,6 +1,11 @@
+using Microsoft.Extensions.Hosting;
 using TwinCheck.Agent.Core;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Host.UseWindowsService(options =>
+{
+    options.ServiceName = "TwinCheck Scan Agent";
+});
 
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
