@@ -5,7 +5,7 @@
 The agent has two processes:
 
 - API: local HTTPS service at `https://localhost:3625`
-- GUI: local profile editor and health monitor
+- GUI: local dashboard for profiles, health diagnostics, logs, and setup guidance
 
 For Ubuntu testing:
 
@@ -110,6 +110,8 @@ For production packaging, replace `dotnet run` with a published binary path.
 
 ## Troubleshooting
 
+- Use the GUI Overview and Diagnostics pages first. They check API reachability, profile readiness, source/destination paths, API key status, active watches, and recent operations.
+- Use the GUI Logs page or `GET /api/scan/logs/recent?lines=200` to inspect recent agent log entries.
 - Health warning for API key: generate a unique key in the GUI and update TwinCheckN.
 - Source missing: confirm the profile path and LAN mount.
 - Destination not writable: confirm filesystem permissions and NAS/LAN availability.

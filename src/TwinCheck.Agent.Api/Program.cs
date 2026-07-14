@@ -10,11 +10,13 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 var configuredAgentConfig = builder.Configuration.GetSection("Agent").Get<AgentConfig>() ?? new AgentConfig();
 builder.Services.AddSingleton(new AgentConfigProvider(configuredAgentConfig));
 builder.Services.AddSingleton<OperationStore>();
+builder.Services.AddSingleton<LocalAgentLogger>();
 builder.Services.AddSingleton<ScanProcessor>();
 builder.Services.AddSingleton<SourceCandidateService>();
 builder.Services.AddSingleton<ScanWatchService>();
 builder.Services.AddSingleton<RollbackService>();
 builder.Services.AddSingleton<HealthService>();
+builder.Services.AddSingleton<DiagnosticsService>();
 
 var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
     ?? ["https://twin-checkn-2b61c265fe70.herokuapp.com"];
@@ -48,6 +50,24 @@ app.UseCors();
 
 app.Use(async (context, next) =>
 {
+    var logger = context.RequestServices.GetRequiredService<LocalAgentLogger>();
+    try
+    {
+        await next();
+        if (!HttpMethods.IsOptions(context.Request.Method))
+        {
+            logger.Info($"{context.Request.Method} {context.Request.Path} -> {context.Response.StatusCode}");
+        }
+    }
+    catch (Exception exception)
+    {
+        logger.Error($"{context.Request.Method} {context.Request.Path} failed.", exception);
+        throw;
+    }
+});
+
+app.Use(async (context, next) =>
+{
     if (context.Request.Path == "/" || HttpMethods.IsOptions(context.Request.Method))
     {
         await next();
@@ -75,6 +95,8 @@ app.MapGet("/", () => Results.Ok(new
     endpoints = new[]
     {
         "/api/scan/health",
+        "/api/scan/diagnostics",
+        "/api/scan/logs/recent",
         "/api/scan/config",
         "/api/scan/candidates",
         "/api/scan/watch/start",
@@ -89,6 +111,24 @@ app.MapGet("/api/scan/health", (HttpContext context, HealthService healthService
 {
     var agentUrl = $"{context.Request.Scheme}://{context.Request.Host}";
     return Results.Ok(healthService.GetHealth(agentUrl));
+});
+
+app.MapGet("/api/scan/diagnostics", (HttpContext context, DiagnosticsService diagnosticsService) =>
+{
+    var agentUrl = $"{context.Request.Scheme}://{context.Request.Host}";
+    return Results.Ok(new { ok = true, diagnostics = diagnosticsService.GetDiagnostics(agentUrl) });
+});
+
+app.MapGet("/api/scan/logs/recent", (HttpRequest request, LocalAgentLogger logger) =>
+{
+    var lineValue = request.Query["lines"].ToString();
+    var lines = int.TryParse(lineValue, out var parsed) ? parsed : 200;
+    return Results.Ok(new
+    {
+        ok = true,
+        logDirectory = logger.LogDirectory,
+        lines = logger.ReadRecentLines(lines)
+    });
 });
 
 app.MapGet("/api/scan/config", (AgentConfigProvider configProvider) =>
@@ -147,7 +187,9 @@ app.MapPost("/api/scan/watch/start", (StartScanWatchRequest request, ScanWatchSe
 {
     try
     {
-        return Results.Ok(new { ok = true, watch = watchService.Start(request) });
+        var watch = watchService.Start(request);
+        app.Services.GetRequiredService<LocalAgentLogger>().Info($"Started scan watch {watch.WatchId} for profile {watch.ProfileId}.");
+        return Results.Ok(new { ok = true, watch });
     }
     catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
     {
@@ -171,7 +213,9 @@ app.MapPost("/api/scan/watch/{watchId}/cancel", (string watchId, ScanWatchServic
 {
     try
     {
-        return Results.Ok(new { ok = true, watch = watchService.Cancel(watchId) });
+        var watch = watchService.Cancel(watchId);
+        app.Services.GetRequiredService<LocalAgentLogger>().Info($"Cancelled scan watch {watchId}.");
+        return Results.Ok(new { ok = true, watch });
     }
     catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
     {
@@ -214,7 +258,9 @@ app.MapPost("/api/scan/rollback", (RollbackScanRequest request, RollbackService 
 {
     try
     {
-        return Results.Ok(rollbackService.Rollback(request));
+        var result = rollbackService.Rollback(request);
+        app.Services.GetRequiredService<LocalAgentLogger>().Info($"Rollback requested for manifest {request.ManifestPath}. Restored {result.RestoredFileCount} file(s).");
+        return Results.Ok(result);
     }
     catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
     {
@@ -226,7 +272,9 @@ app.MapPost("/api/scan/process", (ProcessScanRequest request, ScanProcessor proc
 {
     try
     {
-        return Results.Ok(processor.Process(request));
+        var result = processor.Process(request);
+        app.Services.GetRequiredService<LocalAgentLogger>().Info($"Processed scan {request.OrderNumber}-{request.RollNumber} for profile {request.ProfileId}. Images: {result.ImageCount}.");
+        return Results.Ok(result);
     }
     catch (MultipleSourceCandidatesException exception)
     {

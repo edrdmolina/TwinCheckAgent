@@ -3,122 +3,220 @@
         xmlns:vm="using:TwinCheck.Agent.Gui.ViewModels"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+        mc:Ignorable="d" d:DesignWidth="1180" d:DesignHeight="760"
         x:Class="TwinCheck.Agent.Gui.Views.MainWindow"
         Icon="/Assets/avalonia-logo.ico"
-        Width="880"
-        Height="720"
-        MinWidth="640"
-        MinHeight="560"
+        Width="1180"
+        Height="760"
+        MinWidth="980"
+        MinHeight="660"
         Title="TwinCheck Scan Agent">
 
     <Design.DataContext>
         <vm:MainWindowViewModel/>
     </Design.DataContext>
 
-    <ScrollViewer>
-        <StackPanel Margin="24" Spacing="18">
-            <StackPanel Spacing="4">
-                <TextBlock Text="TwinCheck Scan Agent" FontSize="24" FontWeight="SemiBold"/>
-                <TextBlock Text="Local scanner monitor and profile control" Foreground="#666666"/>
-            </StackPanel>
+    <Grid ColumnDefinitions="248,*" Background="#F6F8FB">
+        <Border Grid.Column="0" Background="#FFFFFF" BorderBrush="#E2E8F0" BorderThickness="0,0,1,0" Padding="18">
+            <DockPanel LastChildFill="True">
+                <StackPanel DockPanel.Dock="Top" Spacing="18">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="TwinCheck" FontSize="22" FontWeight="SemiBold" Foreground="#0F172A"/>
+                        <TextBlock Text="Scan Agent" FontSize="13" Foreground="#64748B"/>
+                    </StackPanel>
 
-            <Border Padding="16" BorderBrush="#D8D8D8" BorderThickness="1" CornerRadius="6">
-                <StackPanel Spacing="12">
-                    <TextBlock Text="Agent" FontSize="16" FontWeight="SemiBold"/>
-                    <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="180,*">
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Agent URL" FontWeight="SemiBold"/>
-                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding AgentUrl}"/>
+                    <Border Classes="pill" Background="{Binding ApiStatusColor}">
+                        <TextBlock Text="{Binding ApiStatus}" Foreground="White" FontWeight="SemiBold"/>
+                    </Border>
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,12,0,0" Text="Config file" FontWeight="SemiBold"/>
-                        <TextBlock Grid.Row="1" Grid.Column="1" Margin="0,12,0,0" Text="{Binding ConfigPath}" TextWrapping="Wrap"/>
-
-                        <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,12,0,0" Text="Status" FontWeight="SemiBold"/>
-                        <TextBlock Grid.Row="2" Grid.Column="1" Margin="0,12,0,0" Text="{Binding StatusMessage}" TextWrapping="Wrap"/>
-                    </Grid>
+                    <StackPanel Spacing="8">
+                        <Button Classes="nav" Content="Overview" Click="Overview_Click"/>
+                        <Button Classes="nav" Content="Profiles" Click="Profiles_Click"/>
+                        <Button Classes="nav" Content="Diagnostics" Click="Diagnostics_Click"/>
+                        <Button Classes="nav" Content="Logs" Click="Logs_Click"/>
+                        <Button Classes="nav" Content="Setup" Click="Setup_Click"/>
+                    </StackPanel>
                 </StackPanel>
-            </Border>
 
-            <Border Padding="16" BorderBrush="#D8D8D8" BorderThickness="1" CornerRadius="6">
-                <StackPanel Spacing="14">
-                    <DockPanel>
-                        <TextBlock Text="Scanner profiles" FontSize="16" FontWeight="SemiBold" DockPanel.Dock="Left"/>
-                        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
-                            <Button Content="Add profile" Click="AddProfile_Click"/>
-                            <Button Content="Delete profile" Click="DeleteProfile_Click"/>
+                <StackPanel DockPanel.Dock="Bottom" Spacing="6">
+                    <TextBlock Text="Agent URL" FontSize="12" Foreground="#64748B"/>
+                    <TextBlock Text="{Binding AgentUrl}" FontWeight="SemiBold" Foreground="#334155"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <Grid Grid.Column="1" RowDefinitions="Auto,*" Margin="28">
+            <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,22">
+                <StackPanel DockPanel.Dock="Left" Spacing="4">
+                    <TextBlock Text="{Binding PageTitle}" FontSize="26" FontWeight="SemiBold" Foreground="#0F172A"/>
+                    <TextBlock Text="{Binding StatusMessage}" Foreground="#64748B"/>
+                </StackPanel>
+
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="8">
+                    <Button Content="Refresh" Click="Refresh_Click"/>
+                    <Button Content="Copy Diagnostics" Click="CopyDiagnostics_Click"/>
+                    <Button Classes="primary" Content="Save Config" Click="Save_Click"/>
+                </StackPanel>
+            </DockPanel>
+
+            <ScrollViewer Grid.Row="1">
+                <Grid>
+                    <StackPanel IsVisible="{Binding IsOverviewVisible}" Spacing="16">
+                        <Grid ColumnDefinitions="*,*,*" RowDefinitions="Auto">
+                            <Border Classes="card" Margin="0,0,12,0">
+                                <StackPanel Spacing="8">
+                                    <TextBlock Text="API Status" FontWeight="SemiBold" Foreground="#334155"/>
+                                    <TextBlock Text="{Binding ApiStatus}" FontSize="22" FontWeight="SemiBold" Foreground="{Binding ApiStatusColor}"/>
+                                    <TextBlock Text="{Binding ApiStatusDetail}" TextWrapping="Wrap" Foreground="#64748B"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Column="1" Classes="card" Margin="0,0,12,0">
+                                <StackPanel Spacing="8">
+                                    <TextBlock Text="Readiness" FontWeight="SemiBold" Foreground="#334155"/>
+                                    <TextBlock Text="{Binding ReadinessSummary}" TextWrapping="Wrap" Foreground="#0F172A"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Column="2" Classes="card">
+                                <StackPanel Spacing="8">
+                                    <TextBlock Text="Watches" FontWeight="SemiBold" Foreground="#334155"/>
+                                    <TextBlock Text="{Binding ActiveWatchesSummary}" TextWrapping="Wrap" Foreground="#0F172A"/>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+
+                        <Border Classes="card">
+                            <StackPanel Spacing="10">
+                                <TextBlock Text="Last Operation" FontSize="17" FontWeight="SemiBold"/>
+                                <TextBlock Text="{Binding LastOperationSummary}" TextWrapping="Wrap" Foreground="#334155"/>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Classes="card">
+                            <StackPanel Spacing="10">
+                                <TextBlock Text="Setup Guidance" FontSize="17" FontWeight="SemiBold"/>
+                                <TextBlock Text="If the API is unreachable, start or restart the local scan agent service, then click Refresh." TextWrapping="Wrap" Foreground="#475569"/>
+                                <TextBlock Text="{Binding SetupServiceName}" FontWeight="SemiBold" Foreground="#2563EB"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <Grid IsVisible="{Binding IsProfilesVisible}" ColumnDefinitions="260,*">
+                        <Border Classes="card" Margin="0,0,16,0">
+                            <DockPanel LastChildFill="True">
+                                <StackPanel DockPanel.Dock="Top" Spacing="10">
+                                    <TextBlock Text="Profiles" FontSize="17" FontWeight="SemiBold"/>
+                                    <Button Content="Add Profile" Click="AddProfile_Click"/>
+                                    <Button Content="Delete Selected" Click="DeleteProfile_Click"/>
+                                </StackPanel>
+                                <ListBox Margin="0,16,0,0"
+                                         ItemsSource="{Binding Profiles}"
+                                         SelectedItem="{Binding SelectedProfile, Mode=TwoWay}"/>
+                            </DockPanel>
+                        </Border>
+
+                        <StackPanel Grid.Column="1" Spacing="16">
+                            <Border Classes="card">
+                                <StackPanel Spacing="14">
+                                    <TextBlock Text="Identity" FontSize="17" FontWeight="SemiBold"/>
+                                    <Grid ColumnDefinitions="160,*" RowDefinitions="Auto,Auto,Auto">
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Profile name" FontWeight="SemiBold"/>
+                                        <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding ProfileName, Mode=TwoWay}"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,12,0,0" Text="Profile ID" FontWeight="SemiBold"/>
+                                        <TextBox Grid.Row="1" Grid.Column="1" Margin="0,12,0,0" Text="{Binding ProfileId}" IsReadOnly="True"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,12,0,0" Text="Scanner mode" FontWeight="SemiBold"/>
+                                        <ComboBox Grid.Row="2" Grid.Column="1" Margin="0,12,0,0"
+                                                  ItemsSource="{Binding ScannerModeOptions}"
+                                                  SelectedItem="{Binding SelectedScannerModeOption, Mode=TwoWay}"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Classes="card">
+                                <StackPanel Spacing="14">
+                                    <TextBlock Text="Folders" FontSize="17" FontWeight="SemiBold"/>
+                                    <Grid ColumnDefinitions="160,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto">
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Source folder" FontWeight="SemiBold"/>
+                                        <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding SourceDir, Mode=TwoWay}"/>
+                                        <Button Grid.Row="0" Grid.Column="2" Margin="8,0,0,0" Content="Browse" Click="BrowseSource_Click"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="1" Margin="0,6,0,0" Text="{Binding SourceHealth}" Foreground="#64748B"/>
+
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,14,0,0" Text="Destination" FontWeight="SemiBold"/>
+                                        <TextBox Grid.Row="2" Grid.Column="1" Margin="0,14,0,0" Text="{Binding DestinationDir, Mode=TwoWay}"/>
+                                        <Button Grid.Row="2" Grid.Column="2" Margin="8,14,0,0" Content="Browse" Click="BrowseDestination_Click"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="1" Margin="0,6,0,0" Text="{Binding DestinationHealth}" Foreground="#64748B"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Classes="card">
+                                <StackPanel Spacing="14">
+                                    <TextBlock Text="Output + Watch Timing" FontSize="17" FontWeight="SemiBold"/>
+                                    <Grid ColumnDefinitions="160,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto">
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Naming pattern" FontWeight="SemiBold"/>
+                                        <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding NamingPattern, Mode=TwoWay}"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,12,0,0" Text="Weekly folders" FontWeight="SemiBold"/>
+                                        <CheckBox Grid.Row="1" Grid.Column="1" Margin="0,12,0,0" IsChecked="{Binding WeeklyDestination, Mode=TwoWay}" Content="Use week/order/roll destination structure"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,12,0,0" Text="Stable seconds" FontWeight="SemiBold"/>
+                                        <NumericUpDown Grid.Row="2" Grid.Column="1" Margin="0,12,0,0" Minimum="0" Maximum="3600" Value="{Binding SettleStableSeconds, Mode=TwoWay}"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,12,0,0" Text="Timeout seconds" FontWeight="SemiBold"/>
+                                        <NumericUpDown Grid.Row="3" Grid.Column="1" Margin="0,12,0,0" Minimum="1" Maximum="7200" Value="{Binding SettleTimeoutSeconds, Mode=TwoWay}"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,12,0,0" Text="Poll seconds" FontWeight="SemiBold"/>
+                                        <NumericUpDown Grid.Row="4" Grid.Column="1" Margin="0,12,0,0" Minimum="1" Maximum="300" Value="{Binding SettlePollSeconds, Mode=TwoWay}"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
-                    </DockPanel>
-
-                    <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
-                          ColumnDefinitions="160,*">
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Agent name" FontWeight="SemiBold"/>
-                        <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding AgentName, Mode=TwoWay}"/>
-
-                        <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,12,0,0" Text="API key" FontWeight="SemiBold"/>
-                        <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,12,0,0" Orientation="Horizontal" Spacing="8">
-                            <TextBox Width="420" PasswordChar="•" Text="{Binding ApiKey, Mode=TwoWay}"/>
-                            <Button Content="Generate" Click="GenerateApiKey_Click"/>
-                        </StackPanel>
-
-                        <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,12,0,0" Text="Selected profile" FontWeight="SemiBold"/>
-                        <ComboBox Grid.Row="2" Grid.Column="1" Margin="0,12,0,0"
-                                  Items="{Binding Profiles}"
-                                  SelectedItem="{Binding SelectedProfile, Mode=TwoWay}"/>
-
-                        <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,12,0,0" Text="Profile ID" FontWeight="SemiBold"/>
-                        <TextBox Grid.Row="3" Grid.Column="1" Margin="0,12,0,0" Text="{Binding ProfileId}" IsReadOnly="True"/>
-
-                        <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,12,0,0" Text="Profile name" FontWeight="SemiBold"/>
-                        <TextBox Grid.Row="4" Grid.Column="1" Margin="0,12,0,0" Text="{Binding ProfileName, Mode=TwoWay}"/>
-
-                        <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,12,0,0" Text="Scanner mode" FontWeight="SemiBold"/>
-                        <ComboBox Grid.Row="5" Grid.Column="1" Margin="0,12,0,0"
-                                  Items="{Binding ScannerModeOptions}"
-                                  SelectedItem="{Binding SelectedScannerModeOption, Mode=TwoWay}"/>
-
-                        <TextBlock Grid.Row="6" Grid.Column="0" Margin="0,12,0,0" Text="Naming pattern" FontWeight="SemiBold"/>
-                        <TextBox Grid.Row="6" Grid.Column="1" Margin="0,12,0,0" Text="{Binding NamingPattern, Mode=TwoWay}"/>
-
-                        <TextBlock Grid.Row="7" Grid.Column="0" Margin="0,12,0,0" Text="Weekly folders" FontWeight="SemiBold"/>
-                        <CheckBox Grid.Row="7" Grid.Column="1" Margin="0,12,0,0" IsChecked="{Binding WeeklyDestination, Mode=TwoWay}" Content="Use week/order/roll destination structure"/>
-
-                        <TextBlock Grid.Row="8" Grid.Column="0" Margin="0,12,0,0" Text="Settle stable sec" FontWeight="SemiBold"/>
-                        <NumericUpDown Grid.Row="8" Grid.Column="1" Margin="0,12,0,0" Minimum="0" Maximum="3600" Value="{Binding SettleStableSeconds, Mode=TwoWay}"/>
-
-                        <TextBlock Grid.Row="9" Grid.Column="0" Margin="0,12,0,0" Text="Settle timeout sec" FontWeight="SemiBold"/>
-                        <NumericUpDown Grid.Row="9" Grid.Column="1" Margin="0,12,0,0" Minimum="1" Maximum="7200" Value="{Binding SettleTimeoutSeconds, Mode=TwoWay}"/>
-
-                        <TextBlock Grid.Row="10" Grid.Column="0" Margin="0,12,0,0" Text="Settle poll sec" FontWeight="SemiBold"/>
-                        <NumericUpDown Grid.Row="10" Grid.Column="1" Margin="0,12,0,0" Minimum="1" Maximum="300" Value="{Binding SettlePollSeconds, Mode=TwoWay}"/>
                     </Grid>
-                </StackPanel>
-            </Border>
 
-            <Border Padding="16" BorderBrush="#D8D8D8" BorderThickness="1" CornerRadius="6">
-                <StackPanel Spacing="14">
-                    <TextBlock Text="Folders" FontSize="16" FontWeight="SemiBold"/>
+                    <StackPanel IsVisible="{Binding IsDiagnosticsVisible}" Spacing="16">
+                        <Border Classes="card">
+                            <StackPanel Spacing="10">
+                                <TextBlock Text="Diagnostics" FontSize="17" FontWeight="SemiBold"/>
+                                <TextBlock Text="{Binding DiagnosticsText}" FontFamily="Consolas, Menlo, monospace" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
 
-                    <Grid RowDefinitions="Auto,Auto,Auto,Auto" ColumnDefinitions="160,*,Auto">
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Source folder" FontWeight="SemiBold"/>
-                        <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding SourceDir, Mode=TwoWay}"/>
-                        <Button Grid.Row="0" Grid.Column="2" Margin="8,0,0,0" Content="Browse..." Click="BrowseSource_Click"/>
+                    <StackPanel IsVisible="{Binding IsLogsVisible}" Spacing="16">
+                        <Border Classes="card">
+                            <StackPanel Spacing="10">
+                                <DockPanel>
+                                    <TextBlock Text="Recent Logs" FontSize="17" FontWeight="SemiBold" DockPanel.Dock="Left"/>
+                                    <Button Content="Open Log Folder" Click="OpenLogs_Click" DockPanel.Dock="Right"/>
+                                </DockPanel>
+                                <TextBlock Text="{Binding LogDirectory}" Foreground="#64748B"/>
+                                <TextBox Text="{Binding RecentLogsText}" FontFamily="Consolas, Menlo, monospace" IsReadOnly="True" AcceptsReturn="True" MinHeight="420"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
 
-                        <TextBlock Grid.Row="1" Grid.Column="1" Margin="0,6,0,0" Text="{Binding SourceHealth}" Foreground="#666666"/>
+                    <StackPanel IsVisible="{Binding IsSetupVisible}" Spacing="16">
+                        <Border Classes="card">
+                            <StackPanel Spacing="10">
+                                <TextBlock Text="TwinCheckN Connection" FontSize="17" FontWeight="SemiBold"/>
+                                <TextBlock Text="Agent URL" FontWeight="SemiBold"/>
+                                <TextBox Text="{Binding AgentUrl}" IsReadOnly="True"/>
+                                <TextBlock Text="API key" FontWeight="SemiBold"/>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBox Width="420" PasswordChar="•" Text="{Binding ApiKey, Mode=TwoWay}"/>
+                                    <Button Content="Generate" Click="GenerateApiKey_Click"/>
+                                    <Button Content="Copy" Click="CopyApiKey_Click"/>
+                                </StackPanel>
+                                <TextBlock Text="{Binding ApiKeyWarning}" Foreground="#D97706"/>
+                            </StackPanel>
+                        </Border>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,14,0,0" Text="Destination folder" FontWeight="SemiBold"/>
-                        <TextBox Grid.Row="2" Grid.Column="1" Margin="0,14,0,0" Text="{Binding DestinationDir, Mode=TwoWay}"/>
-                        <Button Grid.Row="2" Grid.Column="2" Margin="8,14,0,0" Content="Browse..." Click="BrowseDestination_Click"/>
-
-                        <TextBlock Grid.Row="3" Grid.Column="1" Margin="0,6,0,0" Text="{Binding DestinationHealth}" Foreground="#666666"/>
-                    </Grid>
-                </StackPanel>
-            </Border>
-
-            <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Right">
-                <Button Content="Reload" Click="Reload_Click"/>
-                <Button Content="Save profiles" Click="Save_Click"/>
-            </StackPanel>
-        </StackPanel>
-    </ScrollViewer>
-
+                        <Border Classes="card">
+                            <StackPanel Spacing="10">
+                                <TextBlock Text="Service Guidance" FontSize="17" FontWeight="SemiBold"/>
+                                <TextBlock Text="This GUI detects the API but does not start or stop OS services yet. Installers will add direct service controls later." TextWrapping="Wrap"/>
+                                <TextBlock Text="{Binding SetupServiceName}" FontWeight="SemiBold" Foreground="#2563EB"/>
+                                <TextBlock Text="Linux/NixOS: restart the twincheck-scan-agent service. Windows 10: restart the future TwinCheck Scan Agent service." TextWrapping="Wrap" Foreground="#475569"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Grid>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
 </Window>

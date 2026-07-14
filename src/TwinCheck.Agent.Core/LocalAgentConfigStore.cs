@@ -37,5 +37,6 @@ public static class LocalAgentConfigStore
     {
         Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
         File.WriteAllText(ConfigPath, JsonSerializer.Serialize(config, JsonOptions));
+        new LocalAgentLogger().Info($"Saved local agent config to {ConfigPath}");
     }
 }

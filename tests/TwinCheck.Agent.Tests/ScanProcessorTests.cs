@@ -230,6 +230,42 @@ public sealed class ScanProcessorTests
     }
 
     [Fact]
+    public void LocalAgentLoggerWritesAndReadsRecentLines()
+    {
+        using var workspace = new TempWorkspace();
+        var logDir = Path.Combine(workspace.Root, "logs");
+        var logger = new LocalAgentLogger(logDir);
+
+        logger.Info("first");
+        logger.Warning("second");
+        logger.Error("third");
+
+        var recent = logger.ReadRecentLines(2);
+
+        Assert.Equal(2, recent.Count);
+        Assert.Contains("second", recent[0]);
+        Assert.Contains("third", recent[1]);
+        Assert.True(Directory.Exists(logDir));
+    }
+
+    [Fact]
+    public void DiagnosticsServiceReportsProfileReadiness()
+    {
+        using var workspace = new TempWorkspace();
+        var sourceDir = workspace.CreateSource("roll-a");
+        var destinationRoot = workspace.CreateDestination();
+        var config = workspace.CreateConfig(sourceDir, destinationRoot);
+        var service = new DiagnosticsService(new AgentConfigProvider(config), new OperationStore());
+
+        var diagnostics = service.GetDiagnostics("https://localhost:3625");
+
+        Assert.Equal("https://localhost:3625", diagnostics.AgentUrl);
+        Assert.Single(diagnostics.Profiles);
+        Assert.Equal("Ready", diagnostics.Profiles[0].Readiness);
+        Assert.Equal(ScannerModes.FrontierPollingWatch, diagnostics.Profiles[0].ScannerMode);
+    }
+
+    [Fact]
     public void RescanWritesSiblingRescanFolder()
     {
         using var workspace = new TempWorkspace();
