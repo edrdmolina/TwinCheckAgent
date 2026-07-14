@@ -22,8 +22,11 @@ Open the GUI, create scanner profiles, generate a unique API key, and save.
 
 Each scanner should have its own profile.
 
-- `frontier-folder`: source is an existing roll folder or a target root with roll folders.
-- `noritsu-daily-watch`: source is the Noritsu export root. The agent creates and watches the daily `YYYYMMDD` folder.
+- `frontier-polling-watch` (Frontier Polling Watcher): source is a target root with direct child roll folders.
+- `frontier-sentinel-watch` (Frontier Sentinel Watcher): source is a target root where completed roll folders contain `export.done`.
+- `noritsu-watch` (Noritsu Watcher): source is the Noritsu export root. The agent creates and watches the daily `YYYYMMDD` folder.
+
+Legacy profile values `frontier-folder` and `noritsu-daily-watch` are accepted and normalized when profiles are saved.
 
 Destination output uses:
 
@@ -45,20 +48,24 @@ In TwinCheckN:
 2. Enter the agent URL, API key, and profile.
 3. Click Test Agent.
 4. Accept the local certificate in the dispatch browser if prompted.
-5. Use Preview Folders or Start Noritsu Watch before marking a roll scanned.
+5. Use Start Watch for the selected profile, or Preview Folders as a manual fallback.
 
 ## Frontier Workflow
 
 1. Scanner exports one roll folder into the configured target folder.
 2. In TwinCheckN, open the roll.
-3. Click Preview Folders to verify image count and destination.
-4. Choose the folder or click Mark as scanned.
-5. TwinCheckN moves files first, records the scan job, then advances status.
+3. Click Start Watch.
+4. For polling profiles, the agent detects the next child folder with images and waits for stability.
+5. For sentinel profiles, the agent waits for `export.done`, then waits for stability.
+6. Confirm the detected source folder.
+7. TwinCheckN moves files first, records the scan job, then advances status.
+
+Preview Folders remains available for manual verification and troubleshooting.
 
 ## Noritsu Workflow
 
 1. In TwinCheckN, open the roll.
-2. Click Start Noritsu Watch.
+2. Click Start Watch.
 3. Scan the roll on the Noritsu.
 4. The agent detects the next new direct child folder in today’s `YYYYMMDD` folder.
 5. Confirm the detected source folder.

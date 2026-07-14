@@ -17,7 +17,7 @@ public sealed record ScannerProfile
     public required string Name { get; init; }
     public required string SourceDir { get; init; }
     public required string DestinationDir { get; init; }
-    public string ScannerMode { get; init; } = ScannerModes.FrontierFolder;
+    public string ScannerMode { get; init; } = ScannerModes.FrontierPollingWatch;
     public string NamingPattern { get; init; } = "{orderNumber}-{rollNumber}-{imgNumber}";
     public bool WeeklyDestination { get; init; } = true;
     public int SettleStableSeconds { get; init; } = 5;
@@ -28,12 +28,39 @@ public sealed record ScannerProfile
 
 public static class ScannerModes
 {
+    public const string FrontierPollingWatch = "frontier-polling-watch";
+    public const string FrontierSentinelWatch = "frontier-sentinel-watch";
+    public const string NoritsuWatch = "noritsu-watch";
     public const string FrontierFolder = "frontier-folder";
     public const string NoritsuDailyWatch = "noritsu-daily-watch";
 
     public static bool IsValid(string? value) =>
-        string.Equals(value, FrontierFolder, StringComparison.OrdinalIgnoreCase)
-        || string.Equals(value, NoritsuDailyWatch, StringComparison.OrdinalIgnoreCase);
+        Normalize(value) is not null;
+
+    public static string NormalizeOrDefault(string? value) =>
+        Normalize(value) ?? FrontierPollingWatch;
+
+    public static string? Normalize(string? value)
+    {
+        if (string.Equals(value, FrontierPollingWatch, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, FrontierFolder, StringComparison.OrdinalIgnoreCase))
+        {
+            return FrontierPollingWatch;
+        }
+
+        if (string.Equals(value, FrontierSentinelWatch, StringComparison.OrdinalIgnoreCase))
+        {
+            return FrontierSentinelWatch;
+        }
+
+        if (string.Equals(value, NoritsuWatch, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, NoritsuDailyWatch, StringComparison.OrdinalIgnoreCase))
+        {
+            return NoritsuWatch;
+        }
+
+        return null;
+    }
 }
 
 public static class ScanKinds

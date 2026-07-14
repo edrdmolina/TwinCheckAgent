@@ -195,12 +195,38 @@ public sealed class ScanProcessorTests
             && candidate.Path == firstRollFolder
             && candidate.ImageCount == 2
             && !candidate.IsConfiguredRoot
-            && candidate.ScannerMode == ScannerModes.FrontierFolder);
+            && candidate.ScannerMode == ScannerModes.FrontierPollingWatch);
         Assert.Contains(candidates, candidate =>
             candidate.Name == "B31485-9"
             && candidate.Path == secondRollFolder
             && candidate.ImageCount == 1
             && !candidate.IsConfiguredRoot);
+    }
+
+    [Fact]
+    public void ProcessIgnoresExportSentinelFile()
+    {
+        using var workspace = new TempWorkspace();
+        var sourceDir = workspace.CreateSource("roll-a");
+        var destinationRoot = workspace.CreateDestination();
+        workspace.WriteFile(sourceDir, "scan001.jpg", "image-one");
+        workspace.WriteFile(sourceDir, FileSystemSafety.ExportSentinelFileName, "{}");
+
+        var processor = workspace.CreateProcessor(sourceDir, destinationRoot);
+        var result = processor.Process(workspace.CreateRequest());
+
+        Assert.True(result.Ok);
+        Assert.Equal(1, result.ImageCount);
+        Assert.Empty(result.Reviewed);
+        Assert.DoesNotContain(result.Manifest.Files, file => file.FileName == FileSystemSafety.ExportSentinelFileName);
+    }
+
+    [Fact]
+    public void ScannerModeAliasesNormalizeToNewValues()
+    {
+        Assert.Equal(ScannerModes.FrontierPollingWatch, ScannerModes.Normalize(ScannerModes.FrontierFolder));
+        Assert.Equal(ScannerModes.NoritsuWatch, ScannerModes.Normalize(ScannerModes.NoritsuDailyWatch));
+        Assert.Equal(ScannerModes.FrontierSentinelWatch, ScannerModes.Normalize(ScannerModes.FrontierSentinelWatch));
     }
 
     [Fact]
@@ -230,7 +256,7 @@ public sealed class ScanProcessorTests
             [
                 workspace.CreateProfile(sourceRoot, destinationRoot) with
                 {
-                    ScannerMode = ScannerModes.NoritsuDailyWatch,
+                    ScannerMode = ScannerModes.NoritsuWatch,
                     SettleStableSeconds = 0,
                     SettleTimeoutSeconds = 5,
                     SettlePollSeconds = 1
@@ -260,6 +286,102 @@ public sealed class ScanProcessorTests
         Assert.NotNull(state.Candidate);
         Assert.Equal(1, state.Candidate.ImageCount);
         Assert.Equal(rollFolder, state.Candidate.Path);
+        Assert.Equal(ScannerModes.NoritsuWatch, state.Candidate.ScannerMode);
+    }
+
+    [Fact]
+    public async Task FrontierPollingWatchDetectsNewChildFolder()
+    {
+        using var workspace = new TempWorkspace();
+        var sourceRoot = workspace.CreateSource("Frontier");
+        var destinationRoot = workspace.CreateDestination();
+        var config = workspace.CreateConfig(sourceRoot, destinationRoot) with
+        {
+            Profiles =
+            [
+                workspace.CreateProfile(sourceRoot, destinationRoot) with
+                {
+                    ScannerMode = ScannerModes.FrontierPollingWatch,
+                    SettleStableSeconds = 0,
+                    SettleTimeoutSeconds = 5,
+                    SettlePollSeconds = 1
+                }
+            ]
+        };
+        var service = new ScanWatchService(new AgentConfigProvider(config));
+        var watch = service.Start(new StartScanWatchRequest
+        {
+            ProfileId = "dev-profile",
+            OrderNumber = "B31009",
+            RollNumber = "1"
+        });
+
+        var rollFolder = Path.Combine(sourceRoot, "B31485-8");
+        workspace.WriteFile(rollFolder, "frame001.tif", "image-one");
+
+        var state = await WaitForReady(service, watch.WatchId);
+
+        Assert.Equal("ready", state.Status);
+        Assert.NotNull(state.Candidate);
+        Assert.Equal(1, state.Candidate.ImageCount);
+        Assert.Equal(rollFolder, state.Candidate.Path);
+        Assert.Equal(ScannerModes.FrontierPollingWatch, state.Candidate.ScannerMode);
+    }
+
+    [Fact]
+    public async Task FrontierSentinelWatchWaitsForExportDone()
+    {
+        using var workspace = new TempWorkspace();
+        var sourceRoot = workspace.CreateSource("Frontier");
+        var destinationRoot = workspace.CreateDestination();
+        var config = workspace.CreateConfig(sourceRoot, destinationRoot) with
+        {
+            Profiles =
+            [
+                workspace.CreateProfile(sourceRoot, destinationRoot) with
+                {
+                    ScannerMode = ScannerModes.FrontierSentinelWatch,
+                    SettleStableSeconds = 0,
+                    SettleTimeoutSeconds = 5,
+                    SettlePollSeconds = 1
+                }
+            ]
+        };
+        var service = new ScanWatchService(new AgentConfigProvider(config));
+        var watch = service.Start(new StartScanWatchRequest
+        {
+            ProfileId = "dev-profile",
+            OrderNumber = "B31009",
+            RollNumber = "1"
+        });
+
+        var rollFolder = Path.Combine(sourceRoot, "B31485-8");
+        workspace.WriteFile(rollFolder, "frame001.tif", "image-one");
+        await Task.Delay(500);
+        Assert.NotEqual("ready", service.Get(watch.WatchId).Status);
+
+        workspace.WriteFile(rollFolder, FileSystemSafety.ExportSentinelFileName, "{}");
+
+        var state = await WaitForReady(service, watch.WatchId);
+
+        Assert.Equal("ready", state.Status);
+        Assert.NotNull(state.Candidate);
+        Assert.Equal(1, state.Candidate.ImageCount);
+        Assert.Equal(rollFolder, state.Candidate.Path);
+        Assert.Equal(ScannerModes.FrontierSentinelWatch, state.Candidate.ScannerMode);
+    }
+
+    private static async Task<ScanWatchState> WaitForReady(ScanWatchService service, string watchId)
+    {
+        ScanWatchState state;
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        do
+        {
+            await Task.Delay(250);
+            state = service.Get(watchId);
+        } while (state.Status is not "ready" && DateTimeOffset.UtcNow < deadline);
+
+        return state;
     }
 
     private sealed class TempWorkspace : IDisposable

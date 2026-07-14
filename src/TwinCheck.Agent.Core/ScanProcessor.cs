@@ -17,7 +17,8 @@ public sealed class ScanProcessor(AgentConfigProvider configProvider, OperationS
 
         var profile = config.Profiles.SingleOrDefault(profile => profile.Id == request.ProfileId)
             ?? throw new InvalidOperationException($"Unknown scanner profile '{request.ProfileId}'.");
-        if (!ScannerModes.IsValid(profile.ScannerMode))
+        var scannerMode = ScannerModes.Normalize(profile.ScannerMode);
+        if (scannerMode is null)
         {
             throw new InvalidOperationException($"Unknown scanner mode '{profile.ScannerMode}' for profile '{profile.Id}'.");
         }
@@ -59,7 +60,9 @@ public sealed class ScanProcessor(AgentConfigProvider configProvider, OperationS
         }
 
         var startedAt = DateTimeOffset.UtcNow;
-        var files = ScannerFileSystem.GetFilesNatural(sourceDir);
+        var files = ScannerFileSystem.GetFilesNatural(sourceDir)
+            .Where(path => !FileSystemSafety.IsIgnoredControlFile(path))
+            .ToArray();
 
         var imageFiles = ScannerFileSystem.GetImageFilesNatural(sourceDir);
         var reviewFiles = files.Except(imageFiles).ToArray();

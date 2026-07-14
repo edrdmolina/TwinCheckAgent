@@ -45,7 +45,7 @@ public sealed class HealthService(AgentConfigProvider configProvider, OperationS
             .Select(profile => new ScannerProfileHealth(
                 profile.Id,
                 profile.Name,
-                profile.ScannerMode,
+                ScannerModes.NormalizeOrDefault(profile.ScannerMode),
                 Directory.Exists(SourceCandidateService.ResolveCandidateRoot(profile)),
                 Directory.Exists(profile.DestinationDir),
                 Directory.Exists(profile.DestinationDir) && FileSystemSafety.CanWriteToDirectory(profile.DestinationDir),

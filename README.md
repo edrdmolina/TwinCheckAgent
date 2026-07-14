@@ -92,7 +92,7 @@ The GUI writes this machine's local agent config to:
 
 Use the GUI to select the scanner source folder and destination folder, then save the active profile. The API reloads this local config on the next request.
 
-Profiles support Frontier folder processing and Noritsu daily-folder watching. The source folder can be either the exact roll folder containing images or a source root with roll subfolders. If multiple roll subfolders are present, the agent refuses to guess and asks for the exact folder.
+Profiles support Frontier polling, Frontier sentinel, and Noritsu daily-folder watching. Legacy `frontier-folder` and `noritsu-daily-watch` profile values are accepted as aliases. The source folder can be either the exact roll folder containing images or a source root with roll subfolders. If multiple roll subfolders are present during a direct process request, the agent refuses to guess and asks for the exact folder.
 
 See [docs/OPERATIONS.md](docs/OPERATIONS.md) for profile setup, browser setup, Frontier/Noritsu workflows, rollback behavior, troubleshooting, and Ubuntu autostart.
 

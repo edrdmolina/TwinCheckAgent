@@ -103,7 +103,7 @@ app.MapGet("/api/scan/config", (AgentConfigProvider configProvider) =>
         {
             profile.Id,
             profile.Name,
-            profile.ScannerMode,
+            ScannerMode = ScannerModes.NormalizeOrDefault(profile.ScannerMode),
             profile.SourceDir,
             profile.DestinationDir,
             profile.NamingPattern,

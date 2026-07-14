@@ -4,6 +4,8 @@ namespace TwinCheck.Agent.Core;
 
 public static class FileSystemSafety
 {
+    public const string ExportSentinelFileName = "export.done";
+
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".jpg",
@@ -15,6 +17,9 @@ public static class FileSystemSafety
     };
 
     public static bool IsImageFile(string path) => ImageExtensions.Contains(Path.GetExtension(path));
+
+    public static bool IsIgnoredControlFile(string path) =>
+        string.Equals(Path.GetFileName(path), ExportSentinelFileName, StringComparison.OrdinalIgnoreCase);
 
     public static string EnsureInsideAnyRoot(string path, IReadOnlyCollection<string> roots, string label)
     {

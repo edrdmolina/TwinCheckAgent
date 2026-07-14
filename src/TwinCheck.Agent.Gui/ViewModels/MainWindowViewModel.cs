@@ -22,6 +22,12 @@ public class MainWindowViewModel : ViewModelBase
     public string AgentUrl => "https://localhost:3625";
     public string ConfigPath => LocalAgentConfigStore.ConfigPath;
     public ObservableCollection<ProfileEditor> Profiles { get; } = [];
+    public ObservableCollection<ScannerModeOption> ScannerModeOptions { get; } =
+    [
+        new("Frontier Polling Watcher", ScannerModes.FrontierPollingWatch),
+        new("Frontier Sentinel Watcher", ScannerModes.FrontierSentinelWatch),
+        new("Noritsu Watcher", ScannerModes.NoritsuWatch),
+    ];
 
     public string AgentName
     {
@@ -44,6 +50,7 @@ public class MainWindowViewModel : ViewModelBase
             this.RaisePropertyChanged(nameof(ProfileId));
             this.RaisePropertyChanged(nameof(ProfileName));
             this.RaisePropertyChanged(nameof(ScannerMode));
+            this.RaisePropertyChanged(nameof(SelectedScannerModeOption));
             this.RaisePropertyChanged(nameof(SourceDir));
             this.RaisePropertyChanged(nameof(DestinationDir));
             this.RaisePropertyChanged(nameof(NamingPattern));
@@ -78,11 +85,23 @@ public class MainWindowViewModel : ViewModelBase
 
     public string ScannerMode
     {
-        get => SelectedProfile?.ScannerMode ?? ScannerModes.FrontierFolder;
+        get => SelectedProfile?.ScannerMode ?? ScannerModes.FrontierPollingWatch;
         set
         {
             if (SelectedProfile is null) return;
-            SelectedProfile.ScannerMode = value;
+            SelectedProfile.ScannerMode = ScannerModes.NormalizeOrDefault(value);
+            this.RaisePropertyChanged(nameof(SelectedScannerModeOption));
+            this.RaisePropertyChanged(nameof(SourceHealth));
+        }
+    }
+
+    public ScannerModeOption? SelectedScannerModeOption
+    {
+        get => ScannerModeOptions.FirstOrDefault(option => option.Value == ScannerModes.NormalizeOrDefault(ScannerMode));
+        set
+        {
+            if (value is null) return;
+            ScannerMode = value.Value;
         }
     }
 
@@ -168,7 +187,7 @@ public class MainWindowViewModel : ViewModelBase
     {
         get
         {
-            var source = ScannerMode == ScannerModes.NoritsuDailyWatch
+            var source = ScannerModes.NormalizeOrDefault(ScannerMode) == ScannerModes.NoritsuWatch
                 ? ScannerFileSystem.GetNoritsuDailyFolder(SourceDir)
                 : SourceDir;
             return Directory.Exists(source) ? $"Source folder exists: {source}" : $"Source folder is missing: {source}";
@@ -234,7 +253,7 @@ public class MainWindowViewModel : ViewModelBase
         {
             Id = id,
             Name = $"Scanner {Profiles.Count + 1}",
-            ScannerMode = ScannerModes.FrontierFolder,
+            ScannerMode = ScannerModes.FrontierPollingWatch,
             SourceDir = SourceDir,
             DestinationDir = DestinationDir,
             NamingPattern = "{orderNumber}-{rollNumber}-{imgNumber}",
@@ -283,7 +302,7 @@ public class MainWindowViewModel : ViewModelBase
                     Name = "Dev SP-500 Frontier",
                     SourceDir = "/tmp/twincheck-agent/source/inbox",
                     DestinationDir = "/tmp/twincheck-agent/destination",
-                    ScannerMode = ScannerModes.FrontierFolder,
+                    ScannerMode = ScannerModes.FrontierPollingWatch,
                     NamingPattern = "{orderNumber}-{rollNumber}-{imgNumber}",
                 }
             ]
@@ -294,7 +313,7 @@ public sealed class ProfileEditor : ReactiveObject
 {
     private string _id = "";
     private string _name = "";
-    private string _scannerMode = ScannerModes.FrontierFolder;
+    private string _scannerMode = ScannerModes.FrontierPollingWatch;
     private string _sourceDir = "";
     private string _destinationDir = "";
     private string _namingPattern = "{orderNumber}-{rollNumber}-{imgNumber}";
@@ -305,7 +324,7 @@ public sealed class ProfileEditor : ReactiveObject
 
     public string Id { get => _id; set => this.RaiseAndSetIfChanged(ref _id, value); }
     public string Name { get => _name; set => this.RaiseAndSetIfChanged(ref _name, value); }
-    public string ScannerMode { get => _scannerMode; set => this.RaiseAndSetIfChanged(ref _scannerMode, value); }
+    public string ScannerMode { get => _scannerMode; set => this.RaiseAndSetIfChanged(ref _scannerMode, ScannerModes.NormalizeOrDefault(value)); }
     public string SourceDir { get => _sourceDir; set => this.RaiseAndSetIfChanged(ref _sourceDir, value); }
     public string DestinationDir { get => _destinationDir; set => this.RaiseAndSetIfChanged(ref _destinationDir, value); }
     public string NamingPattern { get => _namingPattern; set => this.RaiseAndSetIfChanged(ref _namingPattern, value); }
@@ -319,7 +338,7 @@ public sealed class ProfileEditor : ReactiveObject
         {
             Id = profile.Id,
             Name = profile.Name,
-            ScannerMode = string.IsNullOrWhiteSpace(profile.ScannerMode) ? ScannerModes.FrontierFolder : profile.ScannerMode,
+            ScannerMode = ScannerModes.NormalizeOrDefault(profile.ScannerMode),
             SourceDir = profile.SourceDir,
             DestinationDir = profile.DestinationDir,
             NamingPattern = profile.NamingPattern,
@@ -334,7 +353,7 @@ public sealed class ProfileEditor : ReactiveObject
         {
             Id = string.IsNullOrWhiteSpace(Id) ? $"scanner-{Guid.NewGuid():N}" : Id.Trim(),
             Name = string.IsNullOrWhiteSpace(Name) ? Id.Trim() : Name.Trim(),
-            ScannerMode = ScannerModes.IsValid(ScannerMode) ? ScannerMode : ScannerModes.FrontierFolder,
+            ScannerMode = ScannerModes.NormalizeOrDefault(ScannerMode),
             SourceDir = Path.GetFullPath(SourceDir),
             DestinationDir = Path.GetFullPath(DestinationDir),
             NamingPattern = string.IsNullOrWhiteSpace(NamingPattern) ? "{orderNumber}-{rollNumber}-{imgNumber}" : NamingPattern.Trim(),
@@ -345,4 +364,9 @@ public sealed class ProfileEditor : ReactiveObject
         };
 
     public override string ToString() => string.IsNullOrWhiteSpace(Name) ? Id : $"{Name} ({Id})";
+}
+
+public sealed record ScannerModeOption(string Label, string Value)
+{
+    public override string ToString() => Label;
 }

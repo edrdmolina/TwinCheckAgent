@@ -72,7 +72,9 @@
                         <TextBox Grid.Row="4" Grid.Column="1" Margin="0,12,0,0" Text="{Binding ProfileName, Mode=TwoWay}"/>
 
                         <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,12,0,0" Text="Scanner mode" FontWeight="SemiBold"/>
-                        <TextBox Grid.Row="5" Grid.Column="1" Margin="0,12,0,0" Watermark="frontier-folder or noritsu-daily-watch" Text="{Binding ScannerMode, Mode=TwoWay}"/>
+                        <ComboBox Grid.Row="5" Grid.Column="1" Margin="0,12,0,0"
+                                  Items="{Binding ScannerModeOptions}"
+                                  SelectedItem="{Binding SelectedScannerModeOption, Mode=TwoWay}"/>
 
                         <TextBlock Grid.Row="6" Grid.Column="0" Margin="0,12,0,0" Text="Naming pattern" FontWeight="SemiBold"/>
                         <TextBox Grid.Row="6" Grid.Column="1" Margin="0,12,0,0" Text="{Binding NamingPattern, Mode=TwoWay}"/>

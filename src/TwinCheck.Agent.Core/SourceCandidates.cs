@@ -28,7 +28,7 @@ public sealed class SourceCandidateService(AgentConfigProvider configProvider)
         var profile = ResolveProfile(config, profileId);
         var configuredRoot = root ?? ResolveCandidateRoot(profile);
         var sourceRoot = FileSystemSafety.EnsureInsideAnyRoot(configuredRoot, config.AllowedSourceRoots, "source");
-        if (string.Equals(profile.ScannerMode, ScannerModes.NoritsuDailyWatch, StringComparison.OrdinalIgnoreCase)
+        if (ScannerModes.Normalize(profile.ScannerMode) == ScannerModes.NoritsuWatch
             && string.IsNullOrWhiteSpace(root))
         {
             Directory.CreateDirectory(sourceRoot);
@@ -73,7 +73,7 @@ public sealed class SourceCandidateService(AgentConfigProvider configProvider)
     }
 
     public static string ResolveCandidateRoot(ScannerProfile profile) =>
-        string.Equals(profile.ScannerMode, ScannerModes.NoritsuDailyWatch, StringComparison.OrdinalIgnoreCase)
+        ScannerModes.Normalize(profile.ScannerMode) == ScannerModes.NoritsuWatch
             ? ScannerFileSystem.GetNoritsuDailyFolder(profile.SourceDir)
             : profile.SourceDir;
 
@@ -103,7 +103,7 @@ public sealed class SourceCandidateService(AgentConfigProvider configProvider)
             imageCount,
             ScannerFileSystem.GetNewestImageModifiedAt(path),
             isConfiguredRoot,
-            profile.ScannerMode,
+            ScannerModes.NormalizeOrDefault(profile.ScannerMode),
             destinationPreview);
     }
 

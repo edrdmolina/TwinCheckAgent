@@ -29,14 +29,18 @@ public sealed class ScanWatchService(AgentConfigProvider configProvider)
     {
         var config = configProvider.Current;
         var profile = ResolveProfile(config, request.ProfileId);
-        if (!string.Equals(profile.ScannerMode, ScannerModes.NoritsuDailyWatch, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException($"Profile '{profile.Name}' is not a Noritsu daily watch profile.");
-        }
+        var scannerMode = ScannerModes.Normalize(profile.ScannerMode)
+            ?? throw new InvalidOperationException($"Unknown scanner mode '{profile.ScannerMode}' for profile '{profile.Id}'.");
 
         var sourceRoot = FileSystemSafety.EnsureInsideAnyRoot(profile.SourceDir, config.AllowedSourceRoots, "source");
-        var watchDir = ScannerFileSystem.GetNoritsuDailyFolder(sourceRoot);
-        Directory.CreateDirectory(watchDir);
+        var watchDir = scannerMode == ScannerModes.NoritsuWatch
+            ? ScannerFileSystem.GetNoritsuDailyFolder(sourceRoot)
+            : sourceRoot;
+        if (scannerMode == ScannerModes.NoritsuWatch)
+        {
+            Directory.CreateDirectory(watchDir);
+        }
+
         var destinationRoot = FileSystemSafety.EnsureInsideAnyRoot(profile.DestinationDir, config.AllowedDestinationRoots, "destination");
         if (!Directory.Exists(destinationRoot) || !FileSystemSafety.CanWriteToDirectory(destinationRoot))
         {
@@ -47,6 +51,7 @@ public sealed class ScanWatchService(AgentConfigProvider configProvider)
         var activeWatch = new ActiveWatch(
             watchId,
             profile,
+            scannerMode,
             watchDir,
             request.OrderNumber,
             request.RollNumber,
@@ -92,6 +97,7 @@ public sealed class ScanWatchService(AgentConfigProvider configProvider)
     private sealed class ActiveWatch(
         string watchId,
         ScannerProfile profile,
+        string scannerMode,
         string watchDir,
         string orderNumber,
         string rollNumber,
@@ -104,7 +110,7 @@ public sealed class ScanWatchService(AgentConfigProvider configProvider)
             : [];
         private readonly object gate = new();
         private string status = "watching";
-        private string? message = "Watching for next Noritsu roll folder.";
+        private string? message = BuildInitialMessage(scannerMode);
         private SourceCandidate? candidate;
         private DateTimeOffset? completedAt;
 
@@ -153,39 +159,22 @@ public sealed class ScanWatchService(AgentConfigProvider configProvider)
             while (DateTimeOffset.UtcNow < deadline)
             {
                 token.ThrowIfCancellationRequested();
-                var found = Directory.EnumerateDirectories(watchDir)
-                    .Select(Path.GetFullPath)
-                    .Where(path => !initialChildren.Contains(path))
-                    .OrderBy(path => Directory.GetCreationTimeUtc(path))
-                    .FirstOrDefault();
+                var found = FindCandidateDirectory();
                 if (found is not null)
                 {
-                    SetState("settling", null, $"Found roll folder: {Path.GetFileName(found)}");
+                    SetState("settling", CreateCandidate(found), BuildFoundMessage(found));
                     await ScannerFileSystem.WaitUntilStable(
                         found,
                         profile.SettleStableSeconds,
                         profile.SettleTimeoutSeconds,
                         profile.SettlePollSeconds,
-                        status => SetState("settling", null, status),
+                        status => SetState("settling", CreateCandidate(found), status),
                         token);
 
                     var imageCount = ScannerFileSystem.CountImageFiles(found);
                     SetState(
                         "ready",
-                        new SourceCandidate(
-                            found,
-                            Path.GetFileName(Path.TrimEndingDirectorySeparator(found)),
-                            imageCount,
-                            ScannerFileSystem.GetNewestImageModifiedAt(found),
-                            false,
-                            profile.ScannerMode,
-                            ScanProcessor.BuildFinalDirectoryPreview(
-                                profile.DestinationDir,
-                                orderNumber,
-                                rollNumber,
-                                profile.WeeklyDestination,
-                                scanKind,
-                                rescanNumber)),
+                        CreateCandidate(found),
                         imageCount > 0
                             ? $"Ready: {imageCount} image(s) detected."
                             : "Ready, but no image files were detected.");
@@ -195,8 +184,80 @@ public sealed class ScanWatchService(AgentConfigProvider configProvider)
                 await Task.Delay(TimeSpan.FromSeconds(Math.Max(1, profile.SettlePollSeconds)), token);
             }
 
-            SetState("error", null, "Timed out waiting for a Noritsu roll folder.");
+            SetState("error", null, BuildTimeoutMessage(scannerMode));
         }
+
+        private string? FindCandidateDirectory()
+        {
+            var directories = Directory.Exists(watchDir)
+                ? Directory.EnumerateDirectories(watchDir).Select(Path.GetFullPath).ToArray()
+                : [];
+
+            return scannerMode switch
+            {
+                ScannerModes.FrontierPollingWatch => directories
+                    .Where(path => !initialChildren.Contains(path))
+                    .Where(path => ScannerFileSystem.CountImageFiles(path) > 0)
+                    .OrderBy(path => Directory.GetCreationTimeUtc(path))
+                    .FirstOrDefault(),
+                ScannerModes.FrontierSentinelWatch => directories
+                    .Where(path => !initialChildren.Contains(path))
+                    .Where(path => File.Exists(Path.Combine(path, FileSystemSafety.ExportSentinelFileName)))
+                    .OrderBy(path => Directory.GetCreationTimeUtc(path))
+                    .FirstOrDefault(),
+                ScannerModes.NoritsuWatch => directories
+                    .Where(path => !initialChildren.Contains(path))
+                    .OrderBy(path => Directory.GetCreationTimeUtc(path))
+                    .FirstOrDefault(),
+                _ => null
+            };
+        }
+
+        private SourceCandidate CreateCandidate(string found)
+        {
+            return new SourceCandidate(
+                found,
+                Path.GetFileName(Path.TrimEndingDirectorySeparator(found)),
+                ScannerFileSystem.CountImageFiles(found),
+                ScannerFileSystem.GetNewestImageModifiedAt(found),
+                false,
+                scannerMode,
+                ScanProcessor.BuildFinalDirectoryPreview(
+                    profile.DestinationDir,
+                    orderNumber,
+                    rollNumber,
+                    profile.WeeklyDestination,
+                    scanKind,
+                    rescanNumber));
+        }
+
+        private static string BuildInitialMessage(string mode) => mode switch
+        {
+            ScannerModes.FrontierPollingWatch => "Watching Frontier folder for the next roll folder.",
+            ScannerModes.FrontierSentinelWatch => $"Waiting for Frontier {FileSystemSafety.ExportSentinelFileName}.",
+            ScannerModes.NoritsuWatch => "Watching for next Noritsu roll folder.",
+            _ => "Watching for scan output."
+        };
+
+        private string BuildFoundMessage(string found)
+        {
+            var imageCount = ScannerFileSystem.CountImageFiles(found);
+            return scannerMode switch
+            {
+                ScannerModes.FrontierPollingWatch => $"Found Frontier folder: {Path.GetFileName(found)} ({imageCount} image(s)).",
+                ScannerModes.FrontierSentinelWatch => $"Found Frontier sentinel in {Path.GetFileName(found)} ({imageCount} image(s)).",
+                ScannerModes.NoritsuWatch => $"Found Noritsu folder: {Path.GetFileName(found)} ({imageCount} image(s)).",
+                _ => $"Found roll folder: {Path.GetFileName(found)} ({imageCount} image(s))."
+            };
+        }
+
+        private static string BuildTimeoutMessage(string mode) => mode switch
+        {
+            ScannerModes.FrontierPollingWatch => "Timed out waiting for a Frontier roll folder.",
+            ScannerModes.FrontierSentinelWatch => $"Timed out waiting for Frontier {FileSystemSafety.ExportSentinelFileName}.",
+            ScannerModes.NoritsuWatch => "Timed out waiting for a Noritsu roll folder.",
+            _ => "Timed out waiting for scan output."
+        };
 
         private void SetState(string nextStatus, SourceCandidate? nextCandidate, string? nextMessage)
         {
