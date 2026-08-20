@@ -13,6 +13,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TwinCheck.Agent.Tests", "te
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TwinCheck.Agent.Gui", "src\TwinCheck.Agent.Gui\TwinCheck.Agent.Gui.csproj", "{C1AAFAA8-43CA-4899-BF13-9BA7C3D0FF70}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TwinCheck.Agent.Imaging", "src\TwinCheck.Agent.Imaging\TwinCheck.Agent.Imaging.csproj", "{6E10777E-D4AC-47BA-94A4-BE5B206BEC62}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -71,6 +73,18 @@ Global
 		{C1AAFAA8-43CA-4899-BF13-9BA7C3D0FF70}.Release|x64.Build.0 = Release|Any CPU
 		{C1AAFAA8-43CA-4899-BF13-9BA7C3D0FF70}.Release|x86.ActiveCfg = Release|Any CPU
 		{C1AAFAA8-43CA-4899-BF13-9BA7C3D0FF70}.Release|x86.Build.0 = Release|Any CPU
+		{6E10777E-D4AC-47BA-94A4-BE5B206BEC62}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6E10777E-D4AC-47BA-94A4-BE5B206BEC62}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6E10777E-D4AC-47BA-94A4-BE5B206BEC62}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{6E10777E-D4AC-47BA-94A4-BE5B206BEC62}.Debug|x64.Build.0 = Debug|Any CPU
+		{6E10777E-D4AC-47BA-94A4-BE5B206BEC62}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{6E10777E-D4AC-47BA-94A4-BE5B206BEC62}.Debug|x86.Build.0 = Debug|Any CPU
+		{6E10777E-D4AC-47BA-94A4-BE5B206BEC62}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6E10777E-D4AC-47BA-94A4-BE5B206BEC62}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6E10777E-D4AC-47BA-94A4-BE5B206BEC62}.Release|x64.ActiveCfg = Release|Any CPU
+		{6E10777E-D4AC-47BA-94A4-BE5B206BEC62}.Release|x64.Build.0 = Release|Any CPU
+		{6E10777E-D4AC-47BA-94A4-BE5B206BEC62}.Release|x86.ActiveCfg = Release|Any CPU
+		{6E10777E-D4AC-47BA-94A4-BE5B206BEC62}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -80,5 +94,6 @@ Global
 		{CD7C5C11-FBBD-454B-937C-F293113A2754} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{DE4832D0-89B8-4CC2-A5F1-46B204A9471A} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{C1AAFAA8-43CA-4899-BF13-9BA7C3D0FF70} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{6E10777E-D4AC-47BA-94A4-BE5B206BEC62} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

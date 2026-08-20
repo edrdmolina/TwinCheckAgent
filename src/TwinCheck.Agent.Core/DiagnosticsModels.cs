@@ -7,6 +7,7 @@ public sealed record AgentDiagnostics(
     string Version,
     string Hostname,
     string AgentUrl,
+    IReadOnlyList<string> Capabilities,
     string OperatingSystem,
     string ProcessArchitecture,
     string ConfigPath,
@@ -14,6 +15,7 @@ public sealed record AgentDiagnostics(
     bool DefaultApiKey,
     IReadOnlyList<ScannerProfileDiagnostic> Profiles,
     IReadOnlyList<ScanWatchState> ActiveWatches,
+    IReadOnlyList<ScanOperationView> ActiveOperations,
     OperationSummary? LastOperation,
     IReadOnlyList<string> Warnings);
 
@@ -29,7 +31,11 @@ public sealed record ScannerProfileDiagnostic(
     int CandidateCount,
     string Readiness);
 
-public sealed class DiagnosticsService(AgentConfigProvider configProvider, OperationStore operationStore, ScanWatchService? watchService = null)
+public sealed class DiagnosticsService(
+    AgentConfigProvider configProvider,
+    OperationStore operationStore,
+    ScanWatchService? watchService = null,
+    ScanOperationService? operationService = null)
 {
     public AgentDiagnostics GetDiagnostics(string agentUrl)
     {
@@ -46,11 +52,17 @@ public sealed class DiagnosticsService(AgentConfigProvider configProvider, Opera
             .Where(profile => profile.Readiness != "Ready")
             .Select(profile => $"{profile.Name}: {profile.Readiness}"));
 
+        warnings.AddRange(config.Profiles
+            .Where(profile => ScannerModes.NormalizeOrDefault(profile.ScannerMode) == ScannerModes.FrontierPollingWatch
+                && (profile.SettleStableSeconds < 30 || profile.SettleTimeoutSeconds < 600))
+            .Select(profile => $"{profile.Name}: polling settle window is short; use at least 30 stable seconds and a 600-second timeout, or prefer export.done sentinel mode."));
+
         return new AgentDiagnostics(
             AgentName: config.AgentName,
             Version: config.Version,
             Hostname: Environment.MachineName,
             AgentUrl: agentUrl,
+            Capabilities: ["async-operations-v1"],
             OperatingSystem: RuntimeInformation.OSDescription,
             ProcessArchitecture: RuntimeInformation.ProcessArchitecture.ToString(),
             ConfigPath: LocalAgentConfigStore.ConfigPath,
@@ -58,6 +70,7 @@ public sealed class DiagnosticsService(AgentConfigProvider configProvider, Opera
             DefaultApiKey: config.ApiKey is "change-me" or "dev-local-key",
             Profiles: profiles,
             ActiveWatches: watchService?.ListActive() ?? [],
+            ActiveOperations: operationService?.ListActive() ?? [],
             LastOperation: operationStore.GetLastOperation(),
             Warnings: warnings);
     }

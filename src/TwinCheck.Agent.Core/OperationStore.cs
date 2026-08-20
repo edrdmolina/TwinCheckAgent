@@ -69,7 +69,7 @@ public sealed class OperationStore
     public void WriteManifest(OperationManifest manifest)
     {
         Directory.CreateDirectory(manifest.FinalDir);
-        File.WriteAllText(GetManifestPath(manifest.FinalDir, manifest.IdempotencyKey), JsonSerializer.Serialize(manifest, _jsonOptions));
+        WriteAtomic(GetManifestPath(manifest.FinalDir, manifest.IdempotencyKey), manifest);
         if (manifest.CompletedAt is not null)
         {
             _lastOperation = ToSummary(manifest);
@@ -85,7 +85,7 @@ public sealed class OperationStore
 
     public void WriteManifestAt(string manifestPath, OperationManifest manifest)
     {
-        File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest, _jsonOptions));
+        WriteAtomic(manifestPath, manifest);
         if (manifest.CompletedAt is not null)
         {
             _lastOperation = ToSummary(manifest);
@@ -96,6 +96,14 @@ public sealed class OperationStore
     {
         var safeKey = string.Concat(idempotencyKey.Select(character => char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '-'));
         return Path.Combine(finalDir, $"manifest-{safeKey}.json");
+    }
+
+    private void WriteAtomic(string path, OperationManifest manifest)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
+        File.WriteAllText(temporaryPath, JsonSerializer.Serialize(manifest, _jsonOptions));
+        File.Move(temporaryPath, path, overwrite: true);
     }
 
     private static OperationSummary ToSummary(OperationManifest manifest) =>

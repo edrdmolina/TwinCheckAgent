@@ -7,7 +7,10 @@ public sealed record SourceCandidate(
     DateTimeOffset ModifiedAt,
     bool IsConfiguredRoot,
     string ScannerMode,
-    string? DestinationPreview);
+    string? DestinationPreview,
+    bool HasSentinel = false,
+    bool ReadyForSelection = true,
+    string? ReadinessMessage = null);
 
 public sealed class MultipleSourceCandidatesException(string sourceDir, string message) : InvalidOperationException(message)
 {
@@ -87,6 +90,9 @@ public sealed class SourceCandidateService(AgentConfigProvider configProvider)
         string? scanKind,
         int? rescanNumber)
     {
+        var scannerMode = ScannerModes.NormalizeOrDefault(profile.ScannerMode);
+        var hasSentinel = File.Exists(Path.Combine(path, FileSystemSafety.ExportSentinelFileName));
+        var readyForSelection = scannerMode != ScannerModes.FrontierSentinelWatch || hasSentinel;
         var destinationPreview = !string.IsNullOrWhiteSpace(orderNumber) && !string.IsNullOrWhiteSpace(rollNumber)
             ? ScanProcessor.BuildFinalDirectoryPreview(
                 profile.DestinationDir,
@@ -103,8 +109,15 @@ public sealed class SourceCandidateService(AgentConfigProvider configProvider)
             imageCount,
             ScannerFileSystem.GetNewestImageModifiedAt(path),
             isConfiguredRoot,
-            ScannerModes.NormalizeOrDefault(profile.ScannerMode),
-            destinationPreview);
+            scannerMode,
+            destinationPreview,
+            hasSentinel,
+            readyForSelection,
+            readyForSelection
+                ? scannerMode == ScannerModes.FrontierSentinelWatch
+                    ? $"{FileSystemSafety.ExportSentinelFileName} found; stability will be verified before processing."
+                    : "Folder will be checked for stability before processing."
+                : $"Waiting for {FileSystemSafety.ExportSentinelFileName}.");
     }
 
     private static ScannerProfile ResolveProfile(AgentConfig config, string? profileId)

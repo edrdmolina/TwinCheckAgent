@@ -23,6 +23,7 @@ The processor currently implements these rules:
 - Route non-image files into `_review/` instead of deleting them.
 - Archive the original source folder under `_processed/` only after copy/verify succeeds.
 - Write a per-operation JSON manifest beside the committed roll folder.
+- Queue long-running scans and persist operation progress so browser timeouts or agent restarts do not lose completion state.
 
 Destination folders use:
 
@@ -94,6 +95,12 @@ Use the GUI to select the scanner source folder and destination folder, then sav
 
 Profiles support Frontier polling, Frontier sentinel, and Noritsu daily-folder watching. Legacy `frontier-folder` and `noritsu-daily-watch` profile values are accepted as aliases. The source folder can be either the exact roll folder containing images or a source root with roll subfolders. If multiple roll subfolders are present during a direct process request, the agent refuses to guess and asks for the exact folder.
 
+Durable scan requests can set `waitForReady: true`. TwinCheckAgent then owns the watch and settle phases, resolves the newest scanner candidate, and processes only after the selected profile's readiness condition succeeds. Sentinel profiles always fail closed when `export.done` is absent, including legacy direct-process requests.
+
+Each profile can optionally convert BMP scans to uncompressed `.tif` output. Conversion is off by default, verifies exact pixel equality before publishing, and preserves the original BMP unchanged in the `_processed` archive.
+
+New polling profiles use a 30-second stable window and separate 3600-second settle and watch timeouts. A settle timeout fails closed: the folder is not marked ready and no files are processed. Prefer `frontier-sentinel-watch` with `export.done` whenever the scanner workflow can create a completion marker.
+
 See [docs/OPERATIONS.md](docs/OPERATIONS.md) for profile setup, browser setup, Frontier/Noritsu workflows, rollback behavior, troubleshooting, and Ubuntu autostart.
 
 Run tests:
@@ -102,9 +109,26 @@ Run tests:
 ./scripts/test.sh
 ```
 
+## Build Installers
+
+Build a self-contained Windows 10 ZIP from PowerShell:
+
+```powershell
+.\scripts\package-win.ps1
+```
+
+Build the NixOS package and `.tar.gz`:
+
+```bash
+./scripts/package-nixos.sh
+```
+
+The NixOS target intentionally uses the .NET 9 runtime from Nix; install it on the scanner computer with `nix profile install nixpkgs#dotnet-sdk_9`. Both packages contain install, reinstall, and uninstall commands. Uninstall preserves profiles/logs unless the purge option is selected.
+
+See [Windows 10 test install](docs/WINDOWS_TEST_INSTALL.md) and [NixOS test install](docs/NIXOS_TEST_INSTALL.md) for the transfer and test workflow.
+
 ## Near-Term Work
 
-- Bind API launch settings to `https://localhost:3625` with local certificate guidance.
-- Add BMP to TIFF and EXIF-on-copy processing.
-- Add packaged installers for Linux, Windows, and macOS.
+- Add EXIF-on-copy processing.
+- Add a packaged installer for macOS.
 - Upgrade the Avalonia template packages to the current supported line.

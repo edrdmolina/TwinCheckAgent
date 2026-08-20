@@ -20,6 +20,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\TwinCheck.Agent.Core\TwinCheck.Agent.Core.csproj" />
+    <ProjectReference Include="..\..\src\TwinCheck.Agent.Gui\TwinCheck.Agent.Gui.csproj" />
+    <ProjectReference Include="..\..\src\TwinCheck.Agent.Imaging\TwinCheck.Agent.Imaging.csproj" />
   </ItemGroup>
 
 </Project>

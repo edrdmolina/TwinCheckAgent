@@ -36,11 +36,12 @@ namespace TwinCheck.Agent.Gui.Views
             }
         }
 
-        private void Save_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        private async void Save_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         {
             if (DataContext is MainWindowViewModel viewModel)
             {
                 viewModel.Save();
+                await viewModel.RefreshAsync();
             }
         }
 

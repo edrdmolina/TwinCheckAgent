@@ -2,6 +2,7 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -69,8 +70,10 @@ public class MainWindowViewModel : ViewModelBase
             this.RaisePropertyChanged(nameof(DestinationDir));
             this.RaisePropertyChanged(nameof(NamingPattern));
             this.RaisePropertyChanged(nameof(WeeklyDestination));
+            this.RaisePropertyChanged(nameof(BmpToTiff));
             this.RaisePropertyChanged(nameof(SettleStableSeconds));
             this.RaisePropertyChanged(nameof(SettleTimeoutSeconds));
+            this.RaisePropertyChanged(nameof(WatchTimeoutSeconds));
             this.RaisePropertyChanged(nameof(SettlePollSeconds));
             this.RaisePropertyChanged(nameof(SourceHealth));
             this.RaisePropertyChanged(nameof(DestinationHealth));
@@ -156,9 +159,19 @@ public class MainWindowViewModel : ViewModelBase
         }
     }
 
+    public bool BmpToTiff
+    {
+        get => SelectedProfile?.BmpToTiff ?? false;
+        set
+        {
+            if (SelectedProfile is null) return;
+            SelectedProfile.BmpToTiff = value;
+        }
+    }
+
     public int SettleStableSeconds
     {
-        get => SelectedProfile?.SettleStableSeconds ?? 5;
+        get => SelectedProfile?.SettleStableSeconds ?? 30;
         set
         {
             if (SelectedProfile is null) return;
@@ -168,11 +181,21 @@ public class MainWindowViewModel : ViewModelBase
 
     public int SettleTimeoutSeconds
     {
-        get => SelectedProfile?.SettleTimeoutSeconds ?? 120;
+        get => SelectedProfile?.SettleTimeoutSeconds ?? 3600;
         set
         {
             if (SelectedProfile is null) return;
             SelectedProfile.SettleTimeoutSeconds = value;
+        }
+    }
+
+    public int WatchTimeoutSeconds
+    {
+        get => SelectedProfile?.WatchTimeoutSeconds ?? 3600;
+        set
+        {
+            if (SelectedProfile is null) return;
+            SelectedProfile.WatchTimeoutSeconds = value;
         }
     }
 
@@ -342,8 +365,10 @@ public class MainWindowViewModel : ViewModelBase
             DestinationDir = DestinationDir,
             NamingPattern = "{orderNumber}-{rollNumber}-{imgNumber}",
             WeeklyDestination = true,
-            SettleStableSeconds = 5,
-            SettleTimeoutSeconds = 120,
+            BmpToTiff = false,
+            SettleStableSeconds = 30,
+            SettleTimeoutSeconds = 3600,
+            WatchTimeoutSeconds = 3600,
             SettlePollSeconds = 1,
         };
         Profiles.Add(profile);
@@ -446,6 +471,14 @@ public class MainWindowViewModel : ViewModelBase
             ActiveWatchesSummary = activeWatches == 0 ? "No active watches." : $"{activeWatches} active watch(es).";
             LastOperationSummary = FormatLastOperation(diagnostics);
             DiagnosticsText = FormatDiagnostics(diagnostics);
+        }
+        catch (HttpRequestException exception) when (exception.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            ApiStatus = "API key mismatch";
+            ApiStatusColor = "#DC2626";
+            ApiStatusDetail = "The GUI API key does not match the local service configuration.";
+            ReadinessSummary = "Open Setup, generate or enter the shared API key, then save the config.";
+            DiagnosticsText = "API authentication failed (401 Unauthorized). Save the shared API key and refresh.";
         }
         catch (Exception exception)
         {
@@ -576,8 +609,11 @@ public sealed class ProfileEditor : ReactiveObject
     private string _destinationDir = "";
     private string _namingPattern = "{orderNumber}-{rollNumber}-{imgNumber}";
     private bool _weeklyDestination = true;
-    private int _settleStableSeconds = 5;
-    private int _settleTimeoutSeconds = 120;
+    private bool _bmpToTiff;
+    private ExifOptions? _exif;
+    private int _settleStableSeconds = 30;
+    private int _settleTimeoutSeconds = 3600;
+    private int _watchTimeoutSeconds = 3600;
     private int _settlePollSeconds = 1;
 
     public string Id { get => _id; set => this.RaiseAndSetIfChanged(ref _id, value); }
@@ -587,8 +623,11 @@ public sealed class ProfileEditor : ReactiveObject
     public string DestinationDir { get => _destinationDir; set => this.RaiseAndSetIfChanged(ref _destinationDir, value); }
     public string NamingPattern { get => _namingPattern; set => this.RaiseAndSetIfChanged(ref _namingPattern, value); }
     public bool WeeklyDestination { get => _weeklyDestination; set => this.RaiseAndSetIfChanged(ref _weeklyDestination, value); }
+    public bool BmpToTiff { get => _bmpToTiff; set => this.RaiseAndSetIfChanged(ref _bmpToTiff, value); }
+    public ExifOptions? Exif { get => _exif; set => this.RaiseAndSetIfChanged(ref _exif, value); }
     public int SettleStableSeconds { get => _settleStableSeconds; set => this.RaiseAndSetIfChanged(ref _settleStableSeconds, Math.Max(0, value)); }
     public int SettleTimeoutSeconds { get => _settleTimeoutSeconds; set => this.RaiseAndSetIfChanged(ref _settleTimeoutSeconds, Math.Max(1, value)); }
+    public int WatchTimeoutSeconds { get => _watchTimeoutSeconds; set => this.RaiseAndSetIfChanged(ref _watchTimeoutSeconds, Math.Max(1, value)); }
     public int SettlePollSeconds { get => _settlePollSeconds; set => this.RaiseAndSetIfChanged(ref _settlePollSeconds, Math.Max(1, value)); }
 
     public static ProfileEditor FromProfile(ScannerProfile profile) =>
@@ -601,8 +640,11 @@ public sealed class ProfileEditor : ReactiveObject
             DestinationDir = profile.DestinationDir,
             NamingPattern = profile.NamingPattern,
             WeeklyDestination = profile.WeeklyDestination,
+            BmpToTiff = profile.Options?.BmpToTiff ?? false,
+            Exif = profile.Options?.Exif,
             SettleStableSeconds = profile.SettleStableSeconds,
             SettleTimeoutSeconds = profile.SettleTimeoutSeconds,
+            WatchTimeoutSeconds = profile.WatchTimeoutSeconds,
             SettlePollSeconds = profile.SettlePollSeconds,
         };
 
@@ -616,8 +658,14 @@ public sealed class ProfileEditor : ReactiveObject
             DestinationDir = Path.GetFullPath(DestinationDir),
             NamingPattern = string.IsNullOrWhiteSpace(NamingPattern) ? "{orderNumber}-{rollNumber}-{imgNumber}" : NamingPattern.Trim(),
             WeeklyDestination = WeeklyDestination,
+            Options = new ScanOptions
+            {
+                BmpToTiff = BmpToTiff,
+                Exif = Exif
+            },
             SettleStableSeconds = SettleStableSeconds,
             SettleTimeoutSeconds = SettleTimeoutSeconds,
+            WatchTimeoutSeconds = WatchTimeoutSeconds,
             SettlePollSeconds = SettlePollSeconds,
         };
 

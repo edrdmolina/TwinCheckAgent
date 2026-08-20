@@ -1,31 +1,77 @@
-# TwinCheck Scan Agent Windows Test Package
+# TwinCheck Scan Agent — Windows 10
 
-Run these commands from an elevated PowerShell window.
+This package is self-contained; the scanner computer does not need .NET installed.
 
 ## Install
+
+Extract the entire ZIP, then double-click:
+
+```text
+Install-TwinCheck.cmd
+```
+
+Approve the Windows administrator prompt. The installer:
+
+- copies the app to `C:\Program Files\TwinCheck\ScanAgent`
+- installs and starts the `TwinCheck Scan Agent` Windows service
+- creates and trusts a machine-local `localhost` HTTPS certificate
+- creates a shared config with a unique API key when one does not already exist
+- creates desktop and Start menu shortcuts
+- adds TwinCheck Scan Agent to **Settings > Apps** for uninstall
+- stores shared profiles, logs, and durable operation records under `C:\ProgramData\TwinCheck\ScanAgent`
+
+For an advanced install, open PowerShell as Administrator and run:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\install.ps1
 ```
 
-The installer copies the app to `C:\Program Files\TwinCheck\ScanAgent`, installs the `TwinCheck Scan Agent` Windows service, creates a desktop shortcut, and sets shared config/log paths under `C:\ProgramData\TwinCheck\ScanAgent`.
+## NAS or UNC destinations
 
-## Reinstall after rebuilding
+`LocalSystem`, the default service account, usually cannot access paths such as `\\server\share\folder`. Install with a Windows account that can write to the share:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process Bypass
+$cred = Get-Credential
+.\install.ps1 -ServiceCredential $cred
+```
+
+Use the full account name, such as `DESKTOP-V0ENIS3\admin`, and the account password. Windows services cannot sign in with a Windows Hello PIN. The installer grants this account access to the TwinCheck data folder and the local **Log on as a service** right.
+
+You can validate the credential first:
+
+```powershell
+$cred = Get-Credential
+Start-Process powershell -Credential $cred -ArgumentList "-NoExit", "-Command", "whoami"
+```
+
+## Reinstall a test build
+
+Extract the replacement ZIP and double-click `Reinstall-TwinCheck.cmd`, or run:
+
+```powershell
 .\reinstall.ps1
 ```
 
-## Uninstall
+For a NAS/UNC service account:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\uninstall.ps1
+$cred = Get-Credential
+.\reinstall.ps1 -ServiceCredential $cred
 ```
 
-Preserve config/logs by default. To remove `C:\ProgramData\TwinCheck\ScanAgent`:
+Reinstall preserves the shared API key, profiles, logs, and operation records.
+
+## Uninstall
+
+Use any of these methods:
+
+- **Settings > Apps > TwinCheck Scan Agent > Uninstall**
+- **Start > TwinCheck Scan Agent > Uninstall TwinCheck Scan Agent**
+- double-click `Uninstall-TwinCheck.cmd` in the extracted package
+- run `.\uninstall.ps1` from an elevated PowerShell window
+
+The default uninstall preserves profiles and logs for the next test install. To remove those too:
 
 ```powershell
 .\uninstall.ps1 -PurgeData
@@ -39,8 +85,31 @@ curl.exe -k https://localhost:3625/
 curl.exe -k -H "X-Api-Key: YOUR_API_KEY" https://localhost:3625/api/scan/health
 ```
 
-Open the GUI with the desktop shortcut or:
+Open the GUI from the desktop or Start menu shortcut.
+
+## Troubleshooting
+
+Check service state, Windows events, and agent logs:
 
 ```powershell
-& "$env:ProgramFiles\TwinCheck\ScanAgent\gui\TwinCheck.Agent.Gui.exe"
+Get-Service "TwinCheck Scan Agent"
+
+Get-EventLog -LogName Application -Newest 20 |
+  Where-Object { $_.Source -like "*TwinCheck*" -or $_.Message -like "*TwinCheck*" } |
+  Format-List
+
+Get-Content "C:\ProgramData\TwinCheck\ScanAgent\logs\agent-*.log" -Tail 100
+```
+
+Check which Windows account runs the service:
+
+```powershell
+Get-WmiObject Win32_Service -Filter "Name='TwinCheck Scan Agent'" |
+  Select-Object Name, StartName, State
+```
+
+If Event Viewer reports a missing HTTPS certificate, run this from the extracted package or installed application folder as Administrator:
+
+```powershell
+.\repair-certificate.ps1
 ```

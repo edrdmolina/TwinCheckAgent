@@ -81,7 +81,7 @@ public static partial class ScannerFileSystem
 
             if (DateTimeOffset.UtcNow > deadline)
             {
-                onStatus?.Invoke("Warning: settle timeout reached; proceeding anyway.");
+                onStatus?.Invoke("Settle timeout reached; files were not marked ready.");
                 return false;
             }
 

@@ -18,8 +18,14 @@ public static class FileSystemSafety
 
     public static bool IsImageFile(string path) => ImageExtensions.Contains(Path.GetExtension(path));
 
-    public static bool IsIgnoredControlFile(string path) =>
-        string.Equals(Path.GetFileName(path), ExportSentinelFileName, StringComparison.OrdinalIgnoreCase);
+    public static bool IsIgnoredControlFile(string path)
+    {
+        var fileName = Path.GetFileName(path);
+        return string.Equals(fileName, ExportSentinelFileName, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(fileName, "Thumbs.db", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(fileName, "desktop.ini", StringComparison.OrdinalIgnoreCase)
+            || fileName.StartsWith("._", StringComparison.Ordinal);
+    }
 
     public static string EnsureInsideAnyRoot(string path, IReadOnlyCollection<string> roots, string label)
     {
@@ -54,24 +60,68 @@ public static class FileSystemSafety
         return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
 
-    public static void CopyAndVerify(string sourcePath, string destinationPath)
+    public static (long Length, string Sha256) CopyWithSha256(
+        string sourcePath,
+        string destinationPath,
+        Action<long>? onBytesCopied = null)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
-        File.Copy(sourcePath, destinationPath, overwrite: false);
-
-        var sourceInfo = new FileInfo(sourcePath);
-        var destinationInfo = new FileInfo(destinationPath);
-        if (sourceInfo.Length != destinationInfo.Length)
+        var before = new FileInfo(sourcePath);
+        var expectedLength = before.Length;
+        var expectedLastWriteUtc = before.LastWriteTimeUtc;
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024, FileOptions.SequentialScan);
+        using var destination = new FileStream(destinationPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1024 * 1024, FileOptions.SequentialScan);
+        var buffer = new byte[1024 * 1024];
+        long copied = 0;
+        int read;
+        while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
         {
-            throw new IOException($"Copy length mismatch for '{sourcePath}'.");
+            destination.Write(buffer, 0, read);
+            hash.AppendData(buffer, 0, read);
+            copied += read;
+            onBytesCopied?.Invoke(read);
         }
 
-        var sourceHash = ComputeSha256(sourcePath);
-        var destinationHash = ComputeSha256(destinationPath);
-        if (!string.Equals(sourceHash, destinationHash, StringComparison.OrdinalIgnoreCase))
+        destination.Flush(flushToDisk: true);
+        var after = new FileInfo(sourcePath);
+        if (copied != expectedLength || after.Length != expectedLength || after.LastWriteTimeUtc != expectedLastWriteUtc)
         {
-            throw new IOException($"Copy checksum mismatch for '{sourcePath}'.");
+            throw new IOException($"Source changed while it was being copied: '{sourcePath}'.");
         }
+
+        return (copied, Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant());
+    }
+
+    public static void VerifySha256(string path, long expectedLength, string expectedHash, Action<long>? onBytesRead = null)
+    {
+        var info = new FileInfo(path);
+        if (info.Length != expectedLength)
+        {
+            throw new IOException($"Copy length mismatch for '{path}'.");
+        }
+
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024, FileOptions.SequentialScan);
+        var buffer = new byte[1024 * 1024];
+        int read;
+        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            hash.AppendData(buffer, 0, read);
+            onBytesRead?.Invoke(read);
+        }
+
+        var actualHash = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        if (!string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new IOException($"Copy checksum mismatch for '{path}'.");
+        }
+    }
+
+    public static void CopyAndVerify(string sourcePath, string destinationPath)
+    {
+        var copied = CopyWithSha256(sourcePath, destinationPath);
+        VerifySha256(destinationPath, copied.Length, copied.Sha256);
     }
 
     public static bool CanWriteToDirectory(string directory)

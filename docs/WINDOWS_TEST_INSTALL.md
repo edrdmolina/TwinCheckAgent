@@ -1,61 +1,65 @@
 # Windows 10 Test Install
 
-This is the fast test packaging path for Noritsu and Frontier SP3000 validation.
+This is the repeatable package/install/uninstall path for Noritsu and Frontier SP3000 validation.
 
-## Build Package
+## Build the package
 
-From the repo root on a development machine:
+From the repository root in PowerShell:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\package-win.ps1
 ```
 
-Copy this folder to the Windows 10 scanner machine:
+To label a build with another version:
+
+```powershell
+.\scripts\package-win.ps1 -PackageVersion 0.1.1
+```
+
+The build produces both an unpacked directory and a transfer-ready ZIP:
 
 ```text
 artifacts\win-x64\package
+artifacts\win-x64\TwinCheck-Scan-Agent-0.1.0-win-x64.zip
 ```
+
+The package is self-contained, so Windows 10 does not need .NET installed.
 
 ## Install
 
-On the Windows 10 scanner machine, open PowerShell as Administrator:
+1. Copy the ZIP to the Windows 10 scanner computer.
+2. Extract the entire ZIP.
+3. Double-click `Install-TwinCheck.cmd`.
+4. Approve the administrator prompt.
+
+For a NAS/UNC destination, use an elevated PowerShell window so you can supply the service account:
 
 ```powershell
-cd path\to\package
-Set-ExecutionPolicy -Scope Process Bypass
-.\install.ps1
+$cred = Get-Credential
+.\install.ps1 -ServiceCredential $cred
 ```
 
-## Configure
-
-1. Open the TwinCheck Scan Agent desktop shortcut.
-2. Generate or confirm the API key.
-3. Create one profile for the Noritsu scanner.
-4. Create one profile for the Frontier SP3000 LAN path if testing it from the same Windows 10 machine.
-5. Save config.
-6. Click Refresh and confirm the API is connected.
-
-The installer sets the API service and GUI to use the same machine-wide paths:
+The installer uses shared machine paths:
 
 ```text
+C:\Program Files\TwinCheck\ScanAgent
 C:\ProgramData\TwinCheck\ScanAgent\agent-config.json
 C:\ProgramData\TwinCheck\ScanAgent\logs
+C:\ProgramData\TwinCheck\ScanAgent\operations
 ```
 
-That avoids the Windows service reading a different profile/API-key config than the desktop GUI.
+It also creates and trusts the local HTTPS certificate, creates a shared config
+with a unique API key when needed, installs the Windows service, creates
+desktop/Start menu shortcuts, and registers the app under **Settings > Apps**.
+Reinstall preserves the shared key and profiles.
 
-## Browser Certificate
+## Configure and verify
 
-Open this once in the browser that will run TwinCheckN:
-
-```text
-https://localhost:3625
-```
-
-Accept the local development certificate if prompted.
-
-## Verify
+1. Open TwinCheck Scan Agent from the desktop or Start menu.
+2. Generate or confirm the API key.
+3. Create the Noritsu and/or Frontier profile.
+4. Set source and destination folders and save.
+5. Click **Refresh** and confirm the API is connected.
 
 ```powershell
 Get-Service "TwinCheck Scan Agent"
@@ -63,28 +67,25 @@ curl.exe -k https://localhost:3625/
 curl.exe -k -H "X-Api-Key: YOUR_API_KEY" https://localhost:3625/api/scan/health
 ```
 
-## Rebuild and Reinstall
+## Reinstall
 
-After code changes:
+Build and extract the replacement ZIP, then double-click `Reinstall-TwinCheck.cmd`. Profiles, logs, and durable operation records are preserved.
 
-```powershell
-.\scripts\package-win.ps1
-```
-
-Copy the new `artifacts\win-x64\package` folder to the Windows 10 machine and run:
+For a NAS/UNC service account:
 
 ```powershell
-.\reinstall.ps1
+$cred = Get-Credential
+.\reinstall.ps1 -ServiceCredential $cred
 ```
 
 ## Uninstall
 
-```powershell
-.\uninstall.ps1
-```
+Use **Settings > Apps**, the Start menu uninstall shortcut, or double-click `Uninstall-TwinCheck.cmd` in the extracted package.
 
-To remove config and logs too:
+The default uninstall preserves profiles and logs. For a completely clean test:
 
 ```powershell
 .\uninstall.ps1 -PurgeData
 ```
+
+See the `README.md` included in the ZIP for service-account and certificate troubleshooting.

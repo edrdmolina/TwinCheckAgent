@@ -20,8 +20,9 @@ public sealed record ScannerProfile
     public string ScannerMode { get; init; } = ScannerModes.FrontierPollingWatch;
     public string NamingPattern { get; init; } = "{orderNumber}-{rollNumber}-{imgNumber}";
     public bool WeeklyDestination { get; init; } = true;
-    public int SettleStableSeconds { get; init; } = 5;
-    public int SettleTimeoutSeconds { get; init; } = 120;
+    public int SettleStableSeconds { get; init; } = 30;
+    public int SettleTimeoutSeconds { get; init; } = 3600;
+    public int WatchTimeoutSeconds { get; init; } = 3600;
     public int SettlePollSeconds { get; init; } = 1;
     public ScanOptions Options { get; init; } = new();
 }

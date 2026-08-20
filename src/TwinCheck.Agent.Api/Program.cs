@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Hosting;
 using TwinCheck.Agent.Core;
+using TwinCheck.Agent.Imaging;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Host.UseWindowsService(options =>
@@ -16,9 +17,13 @@ var configuredAgentConfig = builder.Configuration.GetSection("Agent").Get<AgentC
 builder.Services.AddSingleton(new AgentConfigProvider(configuredAgentConfig));
 builder.Services.AddSingleton<OperationStore>();
 builder.Services.AddSingleton<LocalAgentLogger>();
+builder.Services.AddSingleton<ScanOperationStore>();
+builder.Services.AddSingleton<IScanImageConverter, MagickScanImageConverter>();
 builder.Services.AddSingleton<ScanProcessor>();
 builder.Services.AddSingleton<SourceCandidateService>();
+builder.Services.AddSingleton<ScanReadinessCoordinator>();
 builder.Services.AddSingleton<ScanWatchService>();
+builder.Services.AddSingleton<ScanOperationService>();
 builder.Services.AddSingleton<RollbackService>();
 builder.Services.AddSingleton<HealthService>();
 builder.Services.AddSingleton<DiagnosticsService>();
@@ -39,6 +44,7 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+_ = app.Services.GetRequiredService<ScanOperationService>();
 
 app.Use(async (context, next) =>
 {
@@ -105,6 +111,7 @@ app.MapGet("/", () => Results.Ok(new
         "/api/scan/config",
         "/api/scan/candidates",
         "/api/scan/watch/start",
+        "/api/scan/operations",
         "/api/scan/process",
         "/api/scan/manifests",
         "/api/scan/manifest",
@@ -155,6 +162,7 @@ app.MapGet("/api/scan/config", (AgentConfigProvider configProvider) =>
             profile.WeeklyDestination,
             profile.SettleStableSeconds,
             profile.SettleTimeoutSeconds,
+            profile.WatchTimeoutSeconds,
             profile.SettlePollSeconds,
             profile.Options
         })
@@ -228,6 +236,44 @@ app.MapPost("/api/scan/watch/{watchId}/cancel", (string watchId, ScanWatchServic
     }
 });
 
+app.MapPost("/api/scan/operations", (ProcessScanRequest request, ScanOperationService operationService) =>
+{
+    try
+    {
+        var queued = operationService.Enqueue(request);
+        if (queued.Conflict)
+        {
+            return Results.Conflict(new
+            {
+                ok = false,
+                code = "idempotency-conflict",
+                error = "The idempotency key is already associated with a different scan request."
+            });
+        }
+
+        var body = new { ok = true, operation = queued.Operation.ToView() };
+        return ScanOperationStatuses.IsTerminal(queued.Operation.Status)
+            ? Results.Ok(body)
+            : Results.Accepted($"/api/scan/operations/{Uri.EscapeDataString(queued.Operation.IdempotencyKey)}", body);
+    }
+    catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
+    {
+        return Results.BadRequest(new { ok = false, error = exception.Message });
+    }
+});
+
+app.MapGet("/api/scan/operations/{idempotencyKey}", (string idempotencyKey, ScanOperationService operationService) =>
+{
+    try
+    {
+        return Results.Ok(new { ok = true, operation = operationService.Get(idempotencyKey).ToView() });
+    }
+    catch (KeyNotFoundException exception)
+    {
+        return Results.NotFound(new { ok = false, error = exception.Message });
+    }
+});
+
 app.MapGet("/api/scan/manifests", (AgentConfigProvider configProvider, OperationStore operationStore) =>
 {
     try
@@ -289,6 +335,16 @@ app.MapPost("/api/scan/process", (ProcessScanRequest request, ScanProcessor proc
             code = "multiple-source-candidates",
             error = exception.Message,
             sourceDir = exception.SourceDir,
+            profileId = request.ProfileId,
+        });
+    }
+    catch (ScanReadinessException exception)
+    {
+        return Results.BadRequest(new
+        {
+            ok = false,
+            code = exception.Code,
+            error = exception.Message,
             profileId = request.ProfileId,
         });
     }

@@ -9,6 +9,8 @@ TestResults/
 coverage/
 artifacts/
 .DS_Store
+._*
+.AppleDouble/
 *.log
 
 .fake

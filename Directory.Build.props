@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <!--
+      Finder can create AppleDouble resource-fork sidecars (._*) when the
+      repository is copied from macOS to another filesystem. The .NET SDK's
+      default item globs would otherwise treat files such as ._Example.cs as
+      C# source and fail with CS2015 on Linux.
+    -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);._*;**/._*</DefaultItemExcludes>
+  </PropertyGroup>
+</Project>

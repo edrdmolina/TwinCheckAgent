@@ -56,6 +56,26 @@ jobs:
       - name: Test
         run: dotnet test tests/TwinCheck.Agent.Tests/TwinCheck.Agent.Tests.csproj --configuration Release --no-build --nologo --logger "trx;LogFileName=test-results.trx"
 
+      - name: Validate NixOS installer lifecycle
+        if: runner.os == 'Linux'
+        run: bash tests/installers/nixos-lifecycle.sh
+
+      - name: Validate Windows installer syntax
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem packaging/windows/*.ps1, scripts/package-win.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              $errors | Format-List
+            }
+          }
+          if ($failed) { exit 1 }
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4

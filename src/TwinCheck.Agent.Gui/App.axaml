@@ -46,6 +46,18 @@
             <Setter Property="Background" Value="#EEF2FF"/>
         </Style>
 
+        <Style Selector="Button.nav.active">
+            <Setter Property="Foreground" Value="#334155"/>
+        </Style>
+
+        <Style Selector="Button.nav.active /template/ ContentPresenter">
+            <Setter Property="Background" Value="#E2E8F0"/>
+        </Style>
+
+        <Style Selector="Button.nav.active:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#CBD5E1"/>
+        </Style>
+
         <Style Selector="Border.card">
             <Setter Property="Background" Value="White"/>
             <Setter Property="BorderBrush" Value="#E2E8F0"/>

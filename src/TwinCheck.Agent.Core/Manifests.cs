@@ -12,6 +12,8 @@ public sealed record ProcessScanRequest
     public string ScanKind { get; init; } = ScanKinds.Original;
     public int? RescanNumber { get; init; }
     public ScanOptions? Options { get; init; }
+    public string? WatchId { get; init; }
+    public bool WaitForReady { get; init; }
     public bool DryRun { get; init; }
 }
 
@@ -31,8 +33,10 @@ public sealed record OperationManifest
     public required string SourceDir { get; init; }
     public required string DestinationDir { get; init; }
     public required string FinalDir { get; init; }
+    public string? SourceArchiveDir { get; init; }
     public string ScanKind { get; init; } = ScanKinds.Original;
     public int? RescanNumber { get; init; }
+    public ScanOptions EffectiveOptions { get; init; } = new();
     public bool DryRun { get; init; }
     public bool Ok { get; init; }
     public DateTimeOffset StartedAt { get; init; }
@@ -61,8 +65,11 @@ public sealed record ScanFileManifest
     public required string SourcePath { get; init; }
     public string? DestinationPath { get; init; }
     public required string FileName { get; init; }
+    public long SourceSize { get; init; }
+    public string? SourceSha256 { get; init; }
     public long Size { get; init; }
     public string? Sha256 { get; init; }
+    public string? Conversion { get; init; }
     public required ScanFileKind Kind { get; init; }
     public required ScanFileOutcome Outcome { get; init; }
     public string? Message { get; init; }

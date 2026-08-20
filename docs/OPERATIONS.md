@@ -28,6 +28,10 @@ Each scanner should have its own profile.
 
 Legacy profile values `frontier-folder` and `noritsu-daily-watch` are accepted and normalized when profiles are saved.
 
+`Stable seconds` is the required quiet period, `Settle timeout` is the maximum time an identified folder may take to become stable, and `Watch timeout` is the maximum time to wait for a new scanner folder. Settle timeout fails closed; it never processes a folder that is still changing. New polling profiles default to 30/3600/3600 seconds. Existing saved profiles retain their values and should be updated if they still use 5/120.
+
+`Convert BMP to lossless TIFF (.tif)` is an opt-in profile setting. When enabled, BMP images are written to the destination as single-page, uncompressed TIFF files after the agent verifies exact pixel equality. Other image formats are copied unchanged. The original BMP files remain byte-for-byte intact in the destination's `_processed` archive. Existing profiles and newly created profiles default to conversion off.
+
 Destination output uses:
 
 ```text
@@ -48,32 +52,34 @@ In TwinCheckN:
 2. Enter the agent URL, API key, and profile.
 3. Click Test Agent.
 4. Accept the local certificate in the dispatch browser if prompted.
-5. Use Start Watch for the selected profile, or Preview Folders as a manual fallback.
+5. Use Mark as Scanned for the selected roll. The durable operation starts the selected profile's watcher automatically; Preview Folders remains a diagnostic fallback.
 
 ## Frontier Workflow
 
 1. Scanner exports one roll folder into the configured target folder.
 2. In TwinCheckN, open the roll.
-3. Click Start Watch.
+3. Click Mark as Scanned.
 4. For polling profiles, the agent detects the next child folder with images and waits for stability.
 5. For sentinel profiles, the agent waits for `export.done`, then waits for stability.
-6. Confirm the detected source folder.
-7. TwinCheckN moves files first, records the scan job, then advances status.
+6. TwinCheckN automatically processes the ready source, records the scan job, then advances status.
+
+Processing is queued by the local agent. TwinCheckN polls the persisted operation state and can resume the status check after a browser timeout, popup closure, or agent restart.
 
 Preview Folders remains available for manual verification and troubleshooting.
 
 ## Noritsu Workflow
 
 1. In TwinCheckN, open the roll.
-2. Click Start Watch.
+2. Click Mark as Scanned.
 3. Scan the roll on the Noritsu.
 4. The agent detects the next new direct child folder in today’s `YYYYMMDD` folder.
-5. Confirm the detected source folder.
-6. TwinCheckN moves files first, records the scan job, then advances status.
+5. TwinCheckN automatically processes the ready source, records the scan job, then advances status.
 
 ## Rollback
 
 Rollback is files-only. It moves files listed in the manifest back to the archived source folder and marks the manifest as rolled back. It does not change TwinCheckN roll or order status.
+
+For converted scans, rollback places the generated `.tif` beside the archived original `.bmp`; it never stores TIFF content under a BMP filename.
 
 ## Ubuntu Autostart
 
@@ -112,8 +118,10 @@ For production packaging, replace `dotnet run` with a published binary path.
 
 - Use the GUI Overview and Diagnostics pages first. They check API reachability, profile readiness, source/destination paths, API key status, active watches, and recent operations.
 - Use the GUI Logs page or `GET /api/scan/logs/recent?lines=200` to inspect recent agent log entries.
+- `GET /api/scan/operations/{idempotencyKey}` reports durable phase and byte/file progress for a queued scan.
 - Health warning for API key: generate a unique key in the GUI and update TwinCheckN.
 - Source missing: confirm the profile path and LAN mount.
 - Destination not writable: confirm filesystem permissions and NAS/LAN availability.
 - Browser failed to fetch: open `https://localhost:3625` in the same browser and accept the certificate.
 - Noritsu watch timeout: confirm the scanner exports a new direct child folder under today’s `YYYYMMDD` folder.
+- Settle timeout: wait for scanner output to finish and retry. The agent intentionally processes nothing when stability cannot be proven.

@@ -36,7 +36,10 @@ public sealed class RollbackService(AgentConfigProvider configProvider, Operatio
                 continue;
             }
 
-            var restorePath = Path.Combine(archiveDir, file.FileName);
+            var restoreName = string.Equals(file.Conversion, ScanFileConversions.BmpToTiff, StringComparison.Ordinal)
+                ? Path.GetFileName(file.DestinationPath)
+                : file.FileName;
+            var restorePath = Path.Combine(archiveDir, restoreName);
             restorePath = ResolveRollbackPath(restorePath);
             File.Move(file.DestinationPath, restorePath, overwrite: false);
             restored++;
@@ -50,6 +53,11 @@ public sealed class RollbackService(AgentConfigProvider configProvider, Operatio
 
     private static string ResolveSourceArchiveDir(ScannerProfile profile, OperationManifest manifest)
     {
+        if (!string.IsNullOrWhiteSpace(manifest.SourceArchiveDir))
+        {
+            return manifest.SourceArchiveDir;
+        }
+
         var processedRoot = Path.Combine(profile.DestinationDir, "_processed");
         var archived = Directory.Exists(processedRoot)
             ? Directory.EnumerateDirectories(processedRoot)

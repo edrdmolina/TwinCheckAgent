@@ -30,11 +30,11 @@
                     </Border>
 
                     <StackPanel Spacing="8">
-                        <Button Classes="nav" Content="Overview" Click="Overview_Click"/>
-                        <Button Classes="nav" Content="Profiles" Click="Profiles_Click"/>
-                        <Button Classes="nav" Content="Diagnostics" Click="Diagnostics_Click"/>
-                        <Button Classes="nav" Content="Logs" Click="Logs_Click"/>
-                        <Button Classes="nav" Content="Setup" Click="Setup_Click"/>
+                        <Button Classes="nav" Classes.active="{Binding IsOverviewVisible}" Content="Overview" Click="Overview_Click"/>
+                        <Button Classes="nav" Classes.active="{Binding IsProfilesVisible}" Content="Profiles" Click="Profiles_Click"/>
+                        <Button Classes="nav" Classes.active="{Binding IsDiagnosticsVisible}" Content="Diagnostics" Click="Diagnostics_Click"/>
+                        <Button Classes="nav" Classes.active="{Binding IsLogsVisible}" Content="Logs" Click="Logs_Click"/>
+                        <Button Classes="nav" Classes.active="{Binding IsSetupVisible}" Content="Setup" Click="Setup_Click"/>
                     </StackPanel>
                 </StackPanel>
 
@@ -151,17 +151,21 @@
                             <Border Classes="card">
                                 <StackPanel Spacing="14">
                                     <TextBlock Text="Output + Watch Timing" FontSize="17" FontWeight="SemiBold"/>
-                                    <Grid ColumnDefinitions="160,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto">
+                                    <Grid ColumnDefinitions="160,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto">
                                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Naming pattern" FontWeight="SemiBold"/>
                                         <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding NamingPattern, Mode=TwoWay}"/>
                                         <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,12,0,0" Text="Weekly folders" FontWeight="SemiBold"/>
                                         <CheckBox Grid.Row="1" Grid.Column="1" Margin="0,12,0,0" IsChecked="{Binding WeeklyDestination, Mode=TwoWay}" Content="Use week/order/roll destination structure"/>
-                                        <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,12,0,0" Text="Stable seconds" FontWeight="SemiBold"/>
-                                        <NumericUpDown Grid.Row="2" Grid.Column="1" Margin="0,12,0,0" Minimum="0" Maximum="3600" Value="{Binding SettleStableSeconds, Mode=TwoWay}"/>
-                                        <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,12,0,0" Text="Timeout seconds" FontWeight="SemiBold"/>
-                                        <NumericUpDown Grid.Row="3" Grid.Column="1" Margin="0,12,0,0" Minimum="1" Maximum="7200" Value="{Binding SettleTimeoutSeconds, Mode=TwoWay}"/>
-                                        <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,12,0,0" Text="Poll seconds" FontWeight="SemiBold"/>
-                                        <NumericUpDown Grid.Row="4" Grid.Column="1" Margin="0,12,0,0" Minimum="1" Maximum="300" Value="{Binding SettlePollSeconds, Mode=TwoWay}"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,12,0,0" Text="BMP output" FontWeight="SemiBold"/>
+                                        <CheckBox Grid.Row="2" Grid.Column="1" Margin="0,12,0,0" IsChecked="{Binding BmpToTiff, Mode=TwoWay}" Content="Convert BMP to lossless TIFF (.tif)"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,12,0,0" Text="Stable seconds" FontWeight="SemiBold"/>
+                                        <NumericUpDown Grid.Row="3" Grid.Column="1" Margin="0,12,0,0" Minimum="0" Maximum="3600" Value="{Binding SettleStableSeconds, Mode=TwoWay}"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,12,0,0" Text="Settle timeout" FontWeight="SemiBold"/>
+                                        <NumericUpDown Grid.Row="4" Grid.Column="1" Margin="0,12,0,0" Minimum="1" Maximum="7200" Value="{Binding SettleTimeoutSeconds, Mode=TwoWay}"/>
+                                        <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,12,0,0" Text="Watch timeout" FontWeight="SemiBold"/>
+                                        <NumericUpDown Grid.Row="5" Grid.Column="1" Margin="0,12,0,0" Minimum="1" Maximum="86400" Value="{Binding WatchTimeoutSeconds, Mode=TwoWay}"/>
+                                        <TextBlock Grid.Row="6" Grid.Column="0" Margin="0,12,0,0" Text="Poll seconds" FontWeight="SemiBold"/>
+                                        <NumericUpDown Grid.Row="6" Grid.Column="1" Margin="0,12,0,0" Minimum="1" Maximum="300" Value="{Binding SettlePollSeconds, Mode=TwoWay}"/>
                                     </Grid>
                                 </StackPanel>
                             </Border>

@@ -6,11 +6,13 @@ public sealed record AgentHealth(
     string Version,
     string Hostname,
     string AgentUrl,
+    IReadOnlyList<string> Capabilities,
     IReadOnlyList<ScannerProfileHealth> Profiles,
     string? ActiveProfileId,
     bool NasMounted,
     IReadOnlyList<string> WritableRoots,
     IReadOnlyList<ScanWatchState> ActiveWatches,
+    IReadOnlyList<ScanOperationView> ActiveOperations,
     OperationSummary? LastOperation,
     IReadOnlyList<string> Warnings);
 
@@ -31,7 +33,11 @@ public sealed record OperationSummary(
     int ImageCount,
     bool Ok);
 
-public sealed class HealthService(AgentConfigProvider configProvider, OperationStore operationStore, ScanWatchService? watchService = null)
+public sealed class HealthService(
+    AgentConfigProvider configProvider,
+    OperationStore operationStore,
+    ScanWatchService? watchService = null,
+    ScanOperationService? operationService = null)
 {
     public HealthService(AgentConfig config, OperationStore operationStore)
         : this(new AgentConfigProvider(config), operationStore, null)
@@ -67,17 +73,26 @@ public sealed class HealthService(AgentConfigProvider configProvider, OperationS
             warnings.Add($"Profile '{profile.Name}' has unavailable source or destination paths.");
         }
 
+        foreach (var profile in config.Profiles.Where(profile =>
+                     ScannerModes.NormalizeOrDefault(profile.ScannerMode) == ScannerModes.FrontierPollingWatch
+                     && (profile.SettleStableSeconds < 30 || profile.SettleTimeoutSeconds < 600)))
+        {
+            warnings.Add($"Profile '{profile.Name}' uses a short polling settle window. Use at least 30 stable seconds and a 600-second settle timeout, or prefer export.done sentinel mode.");
+        }
+
         return new AgentHealth(
             Ok: profileHealth.Length > 0 && profileHealth.Any(profile => profile.SourceExists && profile.DestinationWritable),
             AgentName: config.AgentName,
             Version: config.Version,
             Hostname: Environment.MachineName,
             AgentUrl: agentUrl,
+            Capabilities: ["async-operations-v1", "wait-for-ready-v1"],
             Profiles: profileHealth,
             ActiveProfileId: config.ActiveProfileId,
             NasMounted: writableRoots.Length > 0,
             WritableRoots: writableRoots,
             ActiveWatches: watchService?.ListActive() ?? [],
+            ActiveOperations: operationService?.ListActive() ?? [],
             LastOperation: operationStore.GetLastOperation(),
             Warnings: warnings);
     }
