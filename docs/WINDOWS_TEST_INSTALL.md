@@ -78,6 +78,21 @@ $cred = Get-Credential
 .\reinstall.ps1 -ServiceCredential $cred
 ```
 
+If PowerShell reports that running scripts is disabled, allow scripts only for
+the current PowerShell session, unblock the downloaded script, and retry in the
+same window so `$cred` remains available:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+Unblock-File .\reinstall.ps1
+.\reinstall.ps1 -ServiceCredential $cred
+```
+
+The `Process` policy expires when that PowerShell window closes. Only bypass
+the policy when the package came from a trusted source. If the command is still
+blocked, run `Get-ExecutionPolicy -List`; a defined `MachinePolicy` or
+`UserPolicy` is controlled by Group Policy and requires an administrator.
+
 ## Uninstall
 
 Use **Settings > Apps**, the Start menu uninstall shortcut, or double-click `Uninstall-TwinCheck.cmd` in the extracted package.
