@@ -32,6 +32,7 @@
                     <StackPanel Spacing="8">
                         <Button Classes="nav" Classes.active="{Binding IsOverviewVisible}" Content="Overview" Click="Overview_Click"/>
                         <Button Classes="nav" Classes.active="{Binding IsProfilesVisible}" Content="Profiles" Click="Profiles_Click"/>
+                        <Button Classes="nav" Classes.active="{Binding IsJobsVisible}" Content="Jobs" Click="Jobs_Click"/>
                         <Button Classes="nav" Classes.active="{Binding IsDiagnosticsVisible}" Content="Diagnostics" Click="Diagnostics_Click"/>
                         <Button Classes="nav" Classes.active="{Binding IsLogsVisible}" Content="Logs" Click="Logs_Click"/>
                         <Button Classes="nav" Classes.active="{Binding IsSetupVisible}" Content="Setup" Click="Setup_Click"/>
@@ -171,6 +172,63 @@
                             </Border>
                         </StackPanel>
                     </Grid>
+
+                    <StackPanel IsVisible="{Binding IsJobsVisible}" Spacing="16">
+                        <Border Classes="card">
+                            <StackPanel Spacing="12">
+                                <DockPanel LastChildFill="True">
+                                    <Button Content="Refresh Jobs" Click="RefreshJobs_Click" DockPanel.Dock="Right"/>
+                                    <TextBlock Text="Recent scan jobs" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <TextBlock Text="{Binding JobsStatus}" TextWrapping="Wrap" Foreground="#64748B"/>
+                                <TextBlock Text="{Binding JobActionMessage}" TextWrapping="Wrap" Foreground="#334155"/>
+                                <TextBlock Text="Select a job to see its paths and progress. Waiting jobs can be cancelled before file processing starts." TextWrapping="Wrap" Foreground="#475569"/>
+                                <Grid ColumnDefinitions="150,130,110,110,*" Margin="12,4,4,0">
+                                    <TextBlock Grid.Column="0" Text="Roll" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Column="1" Text="Profile" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Column="2" Text="Status" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Column="3" Text="Phase" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Column="4" Text="Progress" FontWeight="SemiBold"/>
+                                </Grid>
+                                <ListBox ItemsSource="{Binding ScanJobs}"
+                                         SelectedItem="{Binding SelectedJob, Mode=TwoWay}"
+                                         MinHeight="250" MaxHeight="390">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid ColumnDefinitions="150,130,110,110,*" Margin="4,6">
+                                                <TextBlock Grid.Column="0" Text="{Binding RollLabel}" FontWeight="SemiBold"/>
+                                                <TextBlock Grid.Column="1" Text="{Binding ProfileId}"/>
+                                                <TextBlock Grid.Column="2" Text="{Binding Status}"/>
+                                                <TextBlock Grid.Column="3" Text="{Binding Phase}"/>
+                                                <TextBlock Grid.Column="4" Text="{Binding ProgressLabel}"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <Button Content="Cancel Selected Job"
+                                        IsEnabled="{Binding CanCancelSelectedJob}"
+                                        Click="CancelJob_Click"
+                                        HorizontalAlignment="Left"/>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Classes="card" IsVisible="{Binding IsCancelConfirmationVisible}" BorderBrush="#DC2626">
+                            <StackPanel Spacing="10">
+                                <TextBlock Text="{Binding CancelConfirmationText}" TextWrapping="Wrap" FontWeight="SemiBold"/>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button Content="Confirm Cancel" Click="ConfirmCancelJob_Click"/>
+                                    <Button Content="Keep Job" Click="KeepJob_Click"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Classes="card">
+                            <StackPanel Spacing="10">
+                                <TextBlock Text="Selected job details" FontSize="17" FontWeight="SemiBold"/>
+                                <TextBlock Text="{Binding SelectedJobDetails}" FontFamily="Consolas, Menlo, monospace" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
 
                     <StackPanel IsVisible="{Binding IsDiagnosticsVisible}" Spacing="16">
                         <Border Classes="card">

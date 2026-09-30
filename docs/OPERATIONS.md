@@ -65,6 +65,14 @@ In TwinCheckN:
 
 Processing is queued by the local agent. TwinCheckN polls the persisted operation state and can resume the status check after a browser timeout, popup closure, or agent restart.
 
+## Scan Jobs in the Agent GUI
+
+Open **Jobs** in the TwinCheck Scan Agent GUI to see all active scan operations and the 100 most recent finished jobs across all profiles. The list shows each order and roll, profile, status, phase, and file progress. Select a job for its source candidate, resolved source, destination, timestamps, and any error. The page refreshes every five seconds while open; **Refresh Jobs** updates it immediately.
+
+To stop a pending job, select it, click **Cancel Selected Job**, then confirm. Cancellation is available only while the operation is queued, watching for scanner output, or settling the folder. The agent persists the `cancelled` status so a restart does not resume that job. Cancelling the job does not move or delete scanner files. Once hashing, copying, verification, finalization, or archiving has started, the agent rejects cancellation to avoid interrupting file processing. The API also exposes `GET /api/scan/operations?limit=100` and `POST /api/scan/operations/{idempotencyKey}/cancel` with the configured API key.
+
+For a NixOS scanner that has **not** received this version yet, pending operations can be set aside without deleting their records. Stop `twincheck-scan-agent.service` with `systemctl --user stop twincheck-scan-agent.service`, then move only operation JSON files whose status is `queued` or `processing` and phase is `queued`, `watching`, or `settling` from `~/.local/state/TwinCheck/ScanAgent/operations/` into a dated backup directory. If any active operation is in a later phase, inspect its output before moving records. Restart with `systemctl --user start twincheck-scan-agent.service`. A service restart alone resumes saved operations. This manual procedure changes only agent state; TwinCheckN may still show its previously saved scan record until its status check runs again.
+
 Preview Folders remains available for manual verification and troubleshooting.
 
 ## Noritsu Workflow

@@ -24,6 +24,7 @@ The processor currently implements these rules:
 - Archive the original source folder under `_processed/` only after copy/verify succeeds.
 - Write a per-operation JSON manifest beside the committed roll folder.
 - Queue long-running scans and persist operation progress so browser timeouts or agent restarts do not lose completion state.
+- View recent jobs and their statuses in the agent GUI; cancel queued, watching, or settling jobs before file processing starts.
 
 Destination folders use:
 

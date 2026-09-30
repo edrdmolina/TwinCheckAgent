@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -11,9 +12,21 @@ namespace TwinCheck.Agent.Gui.Views
 {
     public partial class MainWindow : Window
     {
+        private readonly DispatcherTimer jobsRefreshTimer;
+
         public MainWindow()
         {
             InitializeComponent();
+            jobsRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+            jobsRefreshTimer.Tick += async (_, _) =>
+            {
+                if (DataContext is MainWindowViewModel { IsJobsVisible: true } viewModel)
+                {
+                    await viewModel.RefreshJobsAsync();
+                }
+            };
+            jobsRefreshTimer.Start();
+            Closed += (_, _) => jobsRefreshTimer.Stop();
         }
 
         private async void BrowseSource_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -87,9 +100,49 @@ namespace TwinCheck.Agent.Gui.Views
 
         private void Overview_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => Navigate("Overview");
         private void Profiles_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => Navigate("Profiles");
+        private async void Jobs_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            Navigate("Jobs");
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                await viewModel.RefreshJobsAsync();
+            }
+        }
         private void Diagnostics_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => Navigate("Diagnostics");
         private void Logs_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => Navigate("Logs");
         private void Setup_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => Navigate("Setup");
+
+        private async void RefreshJobs_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                await viewModel.RefreshJobsAsync();
+            }
+        }
+
+        private void CancelJob_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.BeginCancelSelectedJob();
+            }
+        }
+
+        private async void ConfirmCancelJob_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                await viewModel.ConfirmCancelJobAsync();
+            }
+        }
+
+        private void KeepJob_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.DismissCancelJob();
+            }
+        }
 
         private void Navigate(string page)
         {

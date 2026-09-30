@@ -12,8 +12,9 @@ public static class ScanOperationStatuses
     public const string Processing = "processing";
     public const string Completed = "completed";
     public const string Failed = "failed";
+    public const string Cancelled = "cancelled";
 
-    public static bool IsTerminal(string status) => status is Completed or Failed;
+    public static bool IsTerminal(string status) => status is Completed or Failed or Cancelled;
 }
 
 public static class ScanOperationPhases
@@ -28,6 +29,7 @@ public static class ScanOperationPhases
     public const string Archiving = "archiving";
     public const string Complete = "complete";
     public const string Failed = "failed";
+    public const string Cancelled = "cancelled";
 }
 
 public sealed record ScanProgress(
@@ -80,7 +82,27 @@ public sealed record ScanOperationState
             ErrorSourceDir,
             ResolvedSourceDir,
             Candidate,
-            Result);
+            Result,
+            Request.ProfileId,
+            Request.OrderNumber,
+            Request.RollNumber);
+
+    public ScanJobSummary ToSummary() => new(
+        IdempotencyKey,
+        Request.ProfileId,
+        Request.OrderNumber,
+        Request.RollNumber,
+        Status,
+        Phase,
+        CreatedAt,
+        CompletedAt,
+        Message,
+        Error,
+        Candidate?.Path,
+        ResolvedSourceDir,
+        Result?.Manifest.FinalDir ?? Candidate?.DestinationPreview,
+        FilesCompleted,
+        FileCount);
 }
 
 public sealed record ScanOperationView(
@@ -101,7 +123,27 @@ public sealed record ScanOperationView(
     string? ErrorSourceDir,
     string? ResolvedSourceDir,
     SourceCandidate? Candidate,
-    ProcessScanResult? Result);
+    ProcessScanResult? Result,
+    string ProfileId,
+    string OrderNumber,
+    string RollNumber);
+
+public sealed record ScanJobSummary(
+    string IdempotencyKey,
+    string ProfileId,
+    string OrderNumber,
+    string RollNumber,
+    string Status,
+    string Phase,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? CompletedAt,
+    string? Message,
+    string? Error,
+    string? CandidatePath,
+    string? ResolvedSourceDir,
+    string? DestinationDir,
+    int FilesCompleted,
+    int FileCount);
 
 public sealed record EnqueueScanOperationResult(ScanOperationState Operation, bool Created, bool Conflict);
 
@@ -252,9 +294,11 @@ public sealed class ScanOperationService : IDisposable
     private readonly ScanReadinessCoordinator readinessCoordinator;
     private readonly LocalAgentLogger logger;
     private readonly ConcurrentDictionary<string, Task> running = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> operationCancellations = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> profileGates = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim processingGate = new(1, 1);
     private readonly CancellationTokenSource cancellation = new();
+    private readonly object executionGate = new();
 
     public ScanOperationService(
         ScanOperationStore store,
@@ -298,6 +342,65 @@ public sealed class ScanOperationService : IDisposable
             .Select(operation => operation.ToView())
             .ToArray();
 
+    public IReadOnlyList<ScanJobSummary> ListRecent(int limit = 100)
+    {
+        var operations = store.List();
+        return operations
+            .Where(operation => !ScanOperationStatuses.IsTerminal(operation.Status))
+            .Concat(operations
+                .Where(operation => ScanOperationStatuses.IsTerminal(operation.Status))
+                .Take(Math.Clamp(limit, 1, 500)))
+            .OrderBy(operation => ScanOperationStatuses.IsTerminal(operation.Status))
+            .ThenByDescending(operation => operation.CreatedAt)
+            .Select(operation => operation.ToSummary())
+            .ToArray();
+    }
+
+    public ScanOperationView? Cancel(string idempotencyKey)
+    {
+        lock (executionGate)
+        {
+            var current = store.Get(idempotencyKey);
+            if (current.Status == ScanOperationStatuses.Cancelled)
+            {
+                return current.ToView();
+            }
+
+            if (ScanOperationStatuses.IsTerminal(current.Status)
+                || current.Phase is not (ScanOperationPhases.Queued or ScanOperationPhases.Watching or ScanOperationPhases.Settling))
+            {
+                return null;
+            }
+
+            var cancelled = store.Update(idempotencyKey, operation => operation with
+            {
+                Status = ScanOperationStatuses.Cancelled,
+                Phase = ScanOperationPhases.Cancelled,
+                CompletedAt = DateTimeOffset.UtcNow,
+                Message = "Scan operation cancelled before file processing.",
+                Error = "Scan operation cancelled before file processing.",
+                ErrorCode = "cancelled"
+            });
+            if (operationCancellations.TryGetValue(idempotencyKey, out var source))
+            {
+                source.Cancel();
+            }
+            if (!string.IsNullOrWhiteSpace(current.Request.WatchId))
+            {
+                try
+                {
+                    watchService.Cancel(current.Request.WatchId);
+                }
+                catch (InvalidOperationException)
+                {
+                    // The independent watch may already have completed or been removed.
+                }
+            }
+            logger.Info($"Scan operation {idempotencyKey} cancelled before file processing.");
+            return cancelled.ToView();
+        }
+    }
+
     public void Dispose()
     {
         cancellation.Cancel();
@@ -314,20 +417,24 @@ public sealed class ScanOperationService : IDisposable
 
     private void Schedule(string idempotencyKey)
     {
+        var operationCancellation = operationCancellations.GetOrAdd(
+            idempotencyKey, _ => CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token));
         running.GetOrAdd(idempotencyKey, key => Task.Run(async () =>
         {
             try
             {
-                await RunWorkflow(key);
+                await RunWorkflow(key, operationCancellation.Token);
             }
             finally
             {
                 running.TryRemove(key, out _);
+                operationCancellations.TryRemove(key, out _);
+                operationCancellation.Dispose();
             }
         }));
     }
 
-    private async Task RunWorkflow(string idempotencyKey)
+    private async Task RunWorkflow(string idempotencyKey, CancellationToken operationToken)
     {
         var operation = store.Get(idempotencyKey);
         if (ScanOperationStatuses.IsTerminal(operation.Status))
@@ -336,18 +443,29 @@ public sealed class ScanOperationService : IDisposable
         }
 
         var profileGate = profileGates.GetOrAdd(operation.Request.ProfileId, _ => new SemaphoreSlim(1, 1));
-        await profileGate.WaitAsync(cancellation.Token);
         try
         {
-            await PrepareAndProcess(operation);
+            await profileGate.WaitAsync(operationToken);
         }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        catch (OperationCanceledException) when (operationToken.IsCancellationRequested)
         {
-            store.Update(idempotencyKey, current => current with
+            return;
+        }
+        try
+        {
+            operationToken.ThrowIfCancellationRequested();
+            await PrepareAndProcess(operation, operationToken);
+        }
+        catch (OperationCanceledException) when (operationToken.IsCancellationRequested)
+        {
+            if (!ScanOperationStatuses.IsTerminal(store.Get(idempotencyKey).Status))
             {
-                Status = ScanOperationStatuses.Queued,
-                Message = "Agent stopped; this workflow will resume after restart."
-            });
+                store.Update(idempotencyKey, current => current with
+                {
+                    Status = ScanOperationStatuses.Queued,
+                    Message = "Agent stopped; this workflow will resume after restart."
+                });
+            }
         }
         finally
         {
@@ -355,7 +473,7 @@ public sealed class ScanOperationService : IDisposable
         }
     }
 
-    private async Task PrepareAndProcess(ScanOperationState originalOperation)
+    private async Task PrepareAndProcess(ScanOperationState originalOperation, CancellationToken operationToken)
     {
         var idempotencyKey = originalOperation.IdempotencyKey;
         var operation = store.Get(idempotencyKey);
@@ -365,7 +483,8 @@ public sealed class ScanOperationService : IDisposable
         {
             if (ShouldWaitForReadiness(operation))
             {
-                store.Update(idempotencyKey, current => current with
+                operationToken.ThrowIfCancellationRequested();
+                store.Update(idempotencyKey, current => ScanOperationStatuses.IsTerminal(current.Status) ? current : current with
                 {
                     Status = ScanOperationStatuses.Processing,
                     Phase = ScanOperationPhases.Watching,
@@ -374,16 +493,17 @@ public sealed class ScanOperationService : IDisposable
                 });
                 var ready = await readinessCoordinator.WaitForReadyAsync(
                     operation.Request,
-                    progress => store.Update(idempotencyKey, current => current with
+                    progress => store.Update(idempotencyKey, current => ScanOperationStatuses.IsTerminal(current.Status) ? current : current with
                     {
                         Status = ScanOperationStatuses.Processing,
                         Phase = progress.Phase,
                         Candidate = progress.Candidate,
                         Message = progress.Message
                     }),
-                    cancellation.Token);
+                    operationToken);
 
-                operation = store.Update(idempotencyKey, current => current with
+                operationToken.ThrowIfCancellationRequested();
+                operation = store.Update(idempotencyKey, current => ScanOperationStatuses.IsTerminal(current.Status) ? current : current with
                 {
                     Status = ScanOperationStatuses.Queued,
                     Phase = ScanOperationPhases.Queued,
@@ -398,9 +518,19 @@ public sealed class ScanOperationService : IDisposable
                 effectiveRequest = operation.Request with { SourceDir = operation.ResolvedSourceDir };
             }
 
-            await processingGate.WaitAsync(cancellation.Token);
+            await processingGate.WaitAsync(operationToken);
             try
             {
+                lock (executionGate)
+                {
+                    operationToken.ThrowIfCancellationRequested();
+                    store.Update(idempotencyKey, current => current with
+                    {
+                        Status = ScanOperationStatuses.Processing,
+                        Phase = ScanOperationPhases.Hashing,
+                        Message = "Scan processing started."
+                    });
+                }
                 ProcessReadyOperation(operation, effectiveRequest);
             }
             finally
@@ -487,7 +617,7 @@ public sealed class ScanOperationService : IDisposable
 
     private void FailOperation(ScanOperationState operation, string error, string? errorCode, string? errorSourceDir)
     {
-        var failed = store.Update(operation.IdempotencyKey, current => current with
+        var failed = store.Update(operation.IdempotencyKey, current => ScanOperationStatuses.IsTerminal(current.Status) ? current : current with
         {
             Status = ScanOperationStatuses.Failed,
             Phase = ScanOperationPhases.Failed,
@@ -499,6 +629,10 @@ public sealed class ScanOperationService : IDisposable
             ErrorCode = errorCode,
             ErrorSourceDir = errorSourceDir
         });
+        if (failed.Status != ScanOperationStatuses.Failed)
+        {
+            return;
+        }
         watchService.MarkFailed(operation.Request.WatchId, operation.IdempotencyKey, failed.Error);
         logger.Warning($"Scan operation {operation.IdempotencyKey} failed{(errorCode is null ? "" : $" ({errorCode})")}: {error}");
     }

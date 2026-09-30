@@ -274,6 +274,27 @@ app.MapGet("/api/scan/operations/{idempotencyKey}", (string idempotencyKey, Scan
     }
 });
 
+app.MapGet("/api/scan/operations", (HttpRequest request, ScanOperationService operationService) =>
+{
+    var limit = int.TryParse(request.Query["limit"].ToString(), out var parsed) ? parsed : 100;
+    return Results.Ok(new { ok = true, operations = operationService.ListRecent(limit) });
+});
+
+app.MapPost("/api/scan/operations/{idempotencyKey}/cancel", (string idempotencyKey, ScanOperationService operationService) =>
+{
+    try
+    {
+        var operation = operationService.Cancel(idempotencyKey);
+        return operation is null
+            ? Results.Conflict(new { ok = false, error = "This operation has already started file processing or has finished." })
+            : Results.Ok(new { ok = true, operation });
+    }
+    catch (KeyNotFoundException exception)
+    {
+        return Results.NotFound(new { ok = false, error = exception.Message });
+    }
+});
+
 app.MapGet("/api/scan/manifests", (AgentConfigProvider configProvider, OperationStore operationStore) =>
 {
     try

@@ -26,6 +26,11 @@ public class MainWindowViewModel : ViewModelBase
     private string _activeWatchesSummary = "No active watches.";
     private string _diagnosticsText = "Diagnostics have not been loaded.";
     private string _recentLogsText = "Logs have not been loaded.";
+    private string _jobsStatus = "Open Jobs to load scan operations.";
+    private string _jobActionMessage = "";
+    private ScanJobRow? _selectedJob;
+    private ScanJobRow? _jobToCancel;
+    private bool _isRefreshingJobs;
 
     public MainWindowViewModel()
     {
@@ -37,6 +42,7 @@ public class MainWindowViewModel : ViewModelBase
     public string LogDirectory => LocalAgentLogger.DefaultLogDirectory;
     public string SetupServiceName => OperatingSystem.IsWindows() ? "TwinCheck Scan Agent" : "twincheck-scan-agent";
     public ObservableCollection<ProfileEditor> Profiles { get; } = [];
+    public ObservableCollection<ScanJobRow> ScanJobs { get; } = [];
     public ObservableCollection<ScannerModeOption> ScannerModeOptions { get; } =
     [
         new("Frontier Polling Watcher", ScannerModes.FrontierPollingWatch),
@@ -223,6 +229,7 @@ public class MainWindowViewModel : ViewModelBase
             this.RaiseAndSetIfChanged(ref _selectedPage, value);
             this.RaisePropertyChanged(nameof(IsOverviewVisible));
             this.RaisePropertyChanged(nameof(IsProfilesVisible));
+            this.RaisePropertyChanged(nameof(IsJobsVisible));
             this.RaisePropertyChanged(nameof(IsDiagnosticsVisible));
             this.RaisePropertyChanged(nameof(IsLogsVisible));
             this.RaisePropertyChanged(nameof(IsSetupVisible));
@@ -233,6 +240,7 @@ public class MainWindowViewModel : ViewModelBase
     public string PageTitle => SelectedPage;
     public bool IsOverviewVisible => SelectedPage == "Overview";
     public bool IsProfilesVisible => SelectedPage == "Profiles";
+    public bool IsJobsVisible => SelectedPage == "Jobs";
     public bool IsDiagnosticsVisible => SelectedPage == "Diagnostics";
     public bool IsLogsVisible => SelectedPage == "Logs";
     public bool IsSetupVisible => SelectedPage == "Setup";
@@ -283,6 +291,46 @@ public class MainWindowViewModel : ViewModelBase
     {
         get => _recentLogsText;
         set => this.RaiseAndSetIfChanged(ref _recentLogsText, value);
+    }
+
+    public string JobsStatus
+    {
+        get => _jobsStatus;
+        set => this.RaiseAndSetIfChanged(ref _jobsStatus, value);
+    }
+
+    public string JobActionMessage
+    {
+        get => _jobActionMessage;
+        set => this.RaiseAndSetIfChanged(ref _jobActionMessage, value);
+    }
+
+    public ScanJobRow? SelectedJob
+    {
+        get => _selectedJob;
+        set
+        {
+            this.RaiseAndSetIfChanged(ref _selectedJob, value);
+            this.RaisePropertyChanged(nameof(SelectedJobDetails));
+            this.RaisePropertyChanged(nameof(CanCancelSelectedJob));
+        }
+    }
+
+    public string SelectedJobDetails => SelectedJob?.Details ?? "Select a job to see its source, destination, progress, and error details.";
+    public bool CanCancelSelectedJob => SelectedJob?.CanCancel == true && !IsRefreshingJobs;
+    public bool IsCancelConfirmationVisible => _jobToCancel is not null;
+    public string CancelConfirmationText => _jobToCancel is null
+        ? ""
+        : $"Cancel {_jobToCancel.RollLabel}? The source files will remain in place.";
+
+    public bool IsRefreshingJobs
+    {
+        get => _isRefreshingJobs;
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _isRefreshingJobs, value);
+            this.RaisePropertyChanged(nameof(CanCancelSelectedJob));
+        }
     }
 
     public string ApiKeyWarning =>
@@ -418,8 +466,82 @@ public class MainWindowViewModel : ViewModelBase
     {
         StatusMessage = "Checking local agent...";
         await RefreshApiStatus();
+        if (IsJobsVisible)
+        {
+            await RefreshJobsAsync();
+        }
         RefreshLogs();
         StatusMessage = $"Refreshed {DateTime.Now:t}";
+    }
+
+    public async Task RefreshJobsAsync()
+    {
+        if (IsRefreshingJobs) return;
+        IsRefreshingJobs = true;
+        try
+        {
+            using var document = await GetAgentJson("/api/scan/operations?limit=100");
+            var jobs = document.RootElement.GetProperty("operations")
+                .EnumerateArray()
+                .Select(ScanJobRow.FromJson)
+                .ToArray();
+            var selectedKey = SelectedJob?.IdempotencyKey;
+            ScanJobs.Clear();
+            foreach (var job in jobs)
+            {
+                ScanJobs.Add(job);
+            }
+            SelectedJob = ScanJobs.FirstOrDefault(job => job.IdempotencyKey == selectedKey);
+            var active = jobs.Count(job => job.Status is "queued" or "processing");
+            JobsStatus = $"{active} active, {jobs.Length} recent job(s). Updated {DateTime.Now:t}.";
+        }
+        catch (Exception exception)
+        {
+            JobsStatus = $"Could not load jobs: {exception.Message}";
+        }
+        finally
+        {
+            IsRefreshingJobs = false;
+        }
+    }
+
+    public void BeginCancelSelectedJob()
+    {
+        if (!CanCancelSelectedJob) return;
+        _jobToCancel = SelectedJob;
+        RaiseCancelConfirmationChanged();
+    }
+
+    public void DismissCancelJob()
+    {
+        _jobToCancel = null;
+        RaiseCancelConfirmationChanged();
+    }
+
+    public async Task ConfirmCancelJobAsync()
+    {
+        var job = _jobToCancel;
+        if (job is null || IsRefreshingJobs) return;
+        DismissCancelJob();
+        JobActionMessage = "";
+        try
+        {
+            using var document = await SendAgentJson(
+                HttpMethod.Post,
+                $"/api/scan/operations/{Uri.EscapeDataString(job.IdempotencyKey)}/cancel");
+            JobActionMessage = $"Cancelled {job.RollLabel} before file processing.";
+        }
+        catch (Exception exception)
+        {
+            JobActionMessage = $"Could not cancel {job.RollLabel}: {exception.Message}";
+        }
+        await RefreshJobsAsync();
+    }
+
+    private void RaiseCancelConfirmationChanged()
+    {
+        this.RaisePropertyChanged(nameof(IsCancelConfirmationVisible));
+        this.RaisePropertyChanged(nameof(CancelConfirmationText));
     }
 
     public string BuildDiagnosticsClipboardText() =>
@@ -506,7 +628,9 @@ public class MainWindowViewModel : ViewModelBase
         }
     }
 
-    private async Task<JsonDocument> GetAgentJson(string path)
+    private Task<JsonDocument> GetAgentJson(string path) => SendAgentJson(HttpMethod.Get, path);
+
+    private async Task<JsonDocument> SendAgentJson(HttpMethod method, string path)
     {
         using var handler = new HttpClientHandler
         {
@@ -517,9 +641,24 @@ public class MainWindowViewModel : ViewModelBase
         {
             Timeout = TimeSpan.FromSeconds(8)
         };
-        using var request = new HttpRequestMessage(HttpMethod.Get, AgentUrl + path);
+        using var request = new HttpRequestMessage(method, AgentUrl + path);
         request.Headers.Add("X-Api-Key", ApiKey);
-        var response = await client.SendAsync(request);
+        using var response = await client.SendAsync(request);
+        if (!response.IsSuccessStatusCode && response.StatusCode != HttpStatusCode.Unauthorized)
+        {
+            try
+            {
+                using var errorDocument = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+                if (errorDocument.RootElement.TryGetProperty("error", out var error))
+                {
+                    throw new InvalidOperationException(error.GetString() ?? "Agent request failed.");
+                }
+            }
+            catch (JsonException)
+            {
+                // Use the HTTP status if the service did not return JSON.
+            }
+        }
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync();
         return await JsonDocument.ParseAsync(stream);
@@ -598,6 +737,74 @@ public class MainWindowViewModel : ViewModelBase
                 }
             ]
         };
+}
+
+public sealed record ScanJobRow(
+    string IdempotencyKey,
+    string OrderNumber,
+    string RollNumber,
+    string ProfileId,
+    string Status,
+    string Phase,
+    string Message,
+    string Error,
+    string CandidatePath,
+    string ResolvedSourceDir,
+    string DestinationDir,
+    string CreatedAt,
+    string CompletedAt,
+    int FilesCompleted,
+    int FileCount)
+{
+    public string RollLabel => string.IsNullOrWhiteSpace(OrderNumber) || string.IsNullOrWhiteSpace(RollNumber)
+        ? IdempotencyKey
+        : $"{OrderNumber}-{RollNumber}";
+    public string ProgressLabel => FileCount > 0 ? $"{FilesCompleted}/{FileCount} files" : "No files counted yet";
+    public bool CanCancel => (Status is ScanOperationStatuses.Queued or ScanOperationStatuses.Processing)
+        && (Phase is ScanOperationPhases.Queued or ScanOperationPhases.Watching or ScanOperationPhases.Settling);
+    public string Details => string.Join(Environment.NewLine, new[]
+    {
+        $"Job: {IdempotencyKey}",
+        $"Profile: {ProfileId}",
+        $"Status: {Status} / {Phase}",
+        $"Created: {CreatedAt}",
+        $"Completed: {CompletedAt}",
+        $"Progress: {ProgressLabel}",
+        $"Source candidate: {CandidatePath}",
+        $"Resolved source: {ResolvedSourceDir}",
+        $"Destination: {DestinationDir}",
+        $"Message: {Message}",
+        $"Error: {Error}"
+    });
+
+    public static ScanJobRow FromJson(JsonElement value)
+    {
+        static string ReadString(JsonElement element, string name) =>
+            element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String
+                ? property.GetString() ?? ""
+                : "";
+        static int ReadInt(JsonElement element, string name) =>
+            element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.Number
+                ? property.GetInt32()
+                : 0;
+
+        return new ScanJobRow(
+            ReadString(value, "idempotencyKey"),
+            ReadString(value, "orderNumber"),
+            ReadString(value, "rollNumber"),
+            ReadString(value, "profileId"),
+            ReadString(value, "status"),
+            ReadString(value, "phase"),
+            ReadString(value, "message"),
+            ReadString(value, "error"),
+            ReadString(value, "candidatePath"),
+            ReadString(value, "resolvedSourceDir"),
+            ReadString(value, "destinationDir"),
+            ReadString(value, "createdAt"),
+            ReadString(value, "completedAt"),
+            ReadInt(value, "filesCompleted"),
+            ReadInt(value, "fileCount"));
+    }
 }
 
 public sealed class ProfileEditor : ReactiveObject

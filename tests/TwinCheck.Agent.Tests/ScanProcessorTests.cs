@@ -701,6 +701,132 @@ public sealed class ScanProcessorTests
     }
 
     [Fact]
+    public async Task CancellingWaitingSentinelOperationKeepsSourceAndDoesNotResumeAfterRestart()
+    {
+        using var workspace = new TempWorkspace();
+        var sourceRoot = workspace.CreateSource("Frontier");
+        var destinationRoot = workspace.CreateDestination();
+        var rollFolder = Path.Combine(sourceRoot, "roll-WAIT");
+        workspace.WriteFile(rollFolder, "frame001.tif", "image-one");
+        var config = workspace.CreateConfig(sourceRoot, destinationRoot) with
+        {
+            Profiles =
+            [
+                workspace.CreateProfile(sourceRoot, destinationRoot) with
+                {
+                    ScannerMode = ScannerModes.FrontierSentinelWatch,
+                    WatchTimeoutSeconds = 10
+                }
+            ]
+        };
+        var configProvider = new AgentConfigProvider(config);
+        var logger = new LocalAgentLogger(Path.Combine(workspace.Root, "logs"));
+        var stateDir = Path.Combine(workspace.Root, "state");
+        using (var operations = new ScanOperationService(
+            new ScanOperationStore(stateDir, logger),
+            new ScanProcessor(configProvider, new OperationStore()),
+            new ScanWatchService(configProvider),
+            logger))
+        {
+            operations.Enqueue(workspace.CreateRequest() with { WaitForReady = true });
+            Assert.Single(operations.ListActive());
+            var cancelled = operations.Cancel("op-1");
+            Assert.Equal(ScanOperationStatuses.Cancelled, cancelled?.Status);
+            Assert.Empty(operations.ListActive());
+            Assert.Equal(ScanOperationStatuses.Cancelled, Assert.Single(operations.ListRecent()).Status);
+        }
+
+        workspace.WriteFile(rollFolder, FileSystemSafety.ExportSentinelFileName, "{}");
+        using var recovered = new ScanOperationService(
+            new ScanOperationStore(stateDir, logger),
+            new ScanProcessor(configProvider, new OperationStore()),
+            new ScanWatchService(configProvider),
+            logger);
+        await Task.Delay(1200);
+
+        Assert.Equal(ScanOperationStatuses.Cancelled, recovered.Get("op-1").Status);
+        Assert.True(Directory.Exists(rollFolder));
+        Assert.False(Directory.Exists(workspace.FinalDir(destinationRoot)));
+    }
+
+    [Fact]
+    public async Task CancellingQueuedOperationDoesNotConsumeNextSentinelFolder()
+    {
+        using var workspace = new TempWorkspace();
+        var sourceRoot = workspace.CreateSource("Frontier");
+        var destinationRoot = workspace.CreateDestination();
+        var rollFolder = Path.Combine(sourceRoot, "roll-WAIT");
+        workspace.WriteFile(rollFolder, "frame001.tif", "image-one");
+        var config = workspace.CreateConfig(sourceRoot, destinationRoot) with
+        {
+            Profiles =
+            [
+                workspace.CreateProfile(sourceRoot, destinationRoot) with
+                {
+                    ScannerMode = ScannerModes.FrontierSentinelWatch,
+                    SettleStableSeconds = 0,
+                    WatchTimeoutSeconds = 10
+                }
+            ]
+        };
+        var provider = new AgentConfigProvider(config);
+        var logger = new LocalAgentLogger(Path.Combine(workspace.Root, "logs"));
+        using var operations = new ScanOperationService(
+            new ScanOperationStore(Path.Combine(workspace.Root, "state"), logger),
+            new ScanProcessor(provider, new OperationStore()),
+            new ScanWatchService(provider),
+            logger);
+
+        operations.Enqueue(workspace.CreateRequest() with { WaitForReady = true });
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(3);
+        while (operations.Get("op-1").Phase != ScanOperationPhases.Watching && DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(50);
+        }
+        Assert.Equal(ScanOperationPhases.Watching, operations.Get("op-1").Phase);
+
+        operations.Enqueue(workspace.CreateRequest() with
+        {
+            IdempotencyKey = "op-2",
+            OrderNumber = "B31010",
+            WaitForReady = true
+        });
+        Assert.Equal(ScanOperationStatuses.Cancelled, operations.Cancel("op-2")?.Status);
+        workspace.WriteFile(rollFolder, FileSystemSafety.ExportSentinelFileName, "{}");
+
+        var completed = await WaitForTerminal(operations, "op-1");
+        Assert.Equal(ScanOperationStatuses.Completed, completed.Status);
+        Assert.Equal(ScanOperationStatuses.Cancelled, operations.Get("op-2").Status);
+        Assert.False(Directory.Exists(ScanProcessor.BuildFinalDirectoryPreview(
+            destinationRoot, "B31010", "1", true, ScanKinds.Original, null)));
+    }
+
+    [Fact]
+    public void CancellationIsRefusedAfterFileProcessingStarts()
+    {
+        using var workspace = new TempWorkspace();
+        var sourceRoot = workspace.CreateSource("Frontier");
+        var destinationRoot = workspace.CreateDestination();
+        var config = workspace.CreateConfig(sourceRoot, destinationRoot);
+        var logger = new LocalAgentLogger(Path.Combine(workspace.Root, "logs"));
+        var store = new ScanOperationStore(Path.Combine(workspace.Root, "state"), logger);
+        using var operations = new ScanOperationService(
+            store,
+            new ScanProcessor(config, new OperationStore()),
+            new ScanWatchService(new AgentConfigProvider(config)),
+            logger);
+        store.Enqueue(workspace.CreateRequest());
+        store.Update("op-1", current => current with
+        {
+            Status = ScanOperationStatuses.Processing,
+            Phase = ScanOperationPhases.Copying
+        });
+
+        Assert.Null(operations.Cancel("op-1"));
+        Assert.Equal(ScanOperationStatuses.Processing, operations.Get("op-1").Status);
+    }
+
+    [Fact]
     public async Task PersistedWatchingOperationResumesAfterAgentRestart()
     {
         using var workspace = new TempWorkspace();
