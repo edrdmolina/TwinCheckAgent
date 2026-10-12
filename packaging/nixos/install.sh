@@ -139,8 +139,8 @@ gui_dependencies_expression='let
   pkgs = import (builtins.getFlake "nixpkgs") { system = builtins.currentSystem; };
 in pkgs.buildEnv {
   name = "twincheck-gui-libraries";
-  paths = [ pkgs.fontconfig pkgs.libx11 pkgs.libice pkgs.libsm ];
-  pathsToLink = [ "/lib" ];
+  paths = [ pkgs.fontconfig pkgs.libx11 pkgs.libice pkgs.libsm pkgs.exiftool ];
+  pathsToLink = [ "/lib" "/bin" ];
   extraOutputsToInstall = [ "lib" ];
 }'
 if ! gui_store_path="$(
@@ -157,6 +157,11 @@ if ! gui_store_path="$(
 fi
 
 gui_library_path="$gui_store_path/lib"
+exiftool_bin="$gui_store_path/bin/exiftool"
+if [[ ! -x "$exiftool_bin" ]]; then
+    echo "Nix did not provide the ExifTool metadata writer." >&2
+    exit 1
+fi
 if [[ ! -e "$gui_library_path/libfontconfig.so.1" ]]; then
     echo "Nix resolved the GUI packages, but libfontconfig.so.1 is missing from $gui_library_path." >&2
     exit 1
@@ -256,6 +261,7 @@ fi
     printf 'export TWINCHECK_AGENT_CONFIG_PATH=%q\n' "$config_path"
     printf 'export TWINCHECK_AGENT_LOG_DIR=%q\n' "$log_dir"
     printf 'export TWINCHECK_AGENT_STATE_DIR=%q\n' "$state_dir"
+    printf 'export TWINCHECK_EXIFTOOL_PATH=%q\n' "$exiftool_bin"
     printf 'export DOTNET_ENVIRONMENT=Production\n'
     if [[ "$agent_url" == https://* ]]; then
         printf 'export ASPNETCORE_Kestrel__Certificates__Default__Path=%q\n' "$certificate_path"

@@ -171,7 +171,7 @@ public sealed class ScanProcessorTests
 
         Assert.Single(results, result => result.Created);
         Assert.All(results, result => Assert.False(result.Conflict));
-        Assert.Single(store.List());
+        Assert.Single(store.ListActive());
     }
 
     [Fact]

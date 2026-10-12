@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace TwinCheck.Agent.Core;
 
 public sealed record ProcessScanRequest
@@ -15,6 +17,15 @@ public sealed record ProcessScanRequest
     public string? WatchId { get; init; }
     public bool WaitForReady { get; init; }
     public bool DryRun { get; init; }
+    // Omitting null is essential: legacy request fingerprints must not acquire a new field.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ScanMetadata? Metadata { get; init; }
+}
+
+public sealed record ScanMetadata
+{
+    public string? CustomerName { get; init; }
+    public string? FilmStock { get; init; }
 }
 
 public sealed record ProcessScanResult(

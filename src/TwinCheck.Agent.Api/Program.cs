@@ -19,6 +19,7 @@ builder.Services.AddSingleton<OperationStore>();
 builder.Services.AddSingleton<LocalAgentLogger>();
 builder.Services.AddSingleton<ScanOperationStore>();
 builder.Services.AddSingleton<IScanImageConverter, MagickScanImageConverter>();
+builder.Services.AddSingleton<IScanMetadataWriter, ExifToolMetadataWriter>();
 builder.Services.AddSingleton<ScanProcessor>();
 builder.Services.AddSingleton<SourceCandidateService>();
 builder.Services.AddSingleton<ScanReadinessCoordinator>();
@@ -256,6 +257,18 @@ app.MapPost("/api/scan/operations", (ProcessScanRequest request, ScanOperationSe
             ? Results.Ok(body)
             : Results.Accepted($"/api/scan/operations/{Uri.EscapeDataString(queued.Operation.IdempotencyKey)}", body);
     }
+    catch (ScanOperationHistoryExpiredException exception)
+    {
+        return Results.Json(new
+        {
+            ok = false,
+            code = "job-history-expired",
+            error = exception.Message,
+            idempotencyKey = exception.IdempotencyKey,
+            status = exception.Status,
+            completedAt = exception.CompletedAt
+        }, statusCode: StatusCodes.Status410Gone);
+    }
     catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
     {
         return Results.BadRequest(new { ok = false, error = exception.Message });
@@ -267,6 +280,18 @@ app.MapGet("/api/scan/operations/{idempotencyKey}", (string idempotencyKey, Scan
     try
     {
         return Results.Ok(new { ok = true, operation = operationService.Get(idempotencyKey).ToView() });
+    }
+    catch (ScanOperationHistoryExpiredException exception)
+    {
+        return Results.Json(new
+        {
+            ok = false,
+            code = "job-history-expired",
+            error = exception.Message,
+            idempotencyKey = exception.IdempotencyKey,
+            status = exception.Status,
+            completedAt = exception.CompletedAt
+        }, statusCode: StatusCodes.Status410Gone);
     }
     catch (KeyNotFoundException exception)
     {
@@ -288,6 +313,18 @@ app.MapPost("/api/scan/operations/{idempotencyKey}/cancel", (string idempotencyK
         return operation is null
             ? Results.Conflict(new { ok = false, error = "This operation has already started file processing or has finished." })
             : Results.Ok(new { ok = true, operation });
+    }
+    catch (ScanOperationHistoryExpiredException exception)
+    {
+        return Results.Json(new
+        {
+            ok = false,
+            code = "job-history-expired",
+            error = exception.Message,
+            idempotencyKey = exception.IdempotencyKey,
+            status = exception.Status,
+            completedAt = exception.CompletedAt
+        }, statusCode: StatusCodes.Status410Gone);
     }
     catch (KeyNotFoundException exception)
     {
@@ -347,6 +384,10 @@ app.MapPost("/api/scan/process", (ProcessScanRequest request, ScanProcessor proc
         var result = processor.Process(request);
         app.Services.GetRequiredService<LocalAgentLogger>().Info($"Processed scan {request.OrderNumber}-{request.RollNumber} for profile {request.ProfileId}. Images: {result.ImageCount}.");
         return Results.Ok(result);
+    }
+    catch (ScanMetadataWriteException exception)
+    {
+        return Results.BadRequest(new { ok = false, code = "metadata-write-failed", error = exception.Message });
     }
     catch (MultipleSourceCandidatesException exception)
     {

@@ -162,3 +162,7 @@ For an HTTP-only local diagnostic install:
 ```
 
 The default HTTPS URL is required when a secure TwinCheckN web page connects to the agent.
+
+## Photo metadata dependency
+
+The installer resolves ExifTool from Nix alongside the GUI libraries and sets `TWINCHECK_EXIFTOOL_PATH` in the API launcher. Health advertises `scan-metadata-v1` when it is available. Configure the scanner make/model under Profiles → Photo Metadata; enable TIFF conversion for BMP scans that need metadata.

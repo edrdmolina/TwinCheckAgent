@@ -5,15 +5,18 @@ public sealed class ScanProcessor
     private readonly AgentConfigProvider configProvider;
     private readonly OperationStore operationStore;
     private readonly IScanImageConverter imageConverter;
+    private readonly IScanMetadataWriter metadataWriter;
 
     public ScanProcessor(
         AgentConfigProvider configProvider,
         OperationStore operationStore,
-        IScanImageConverter imageConverter)
+        IScanImageConverter imageConverter,
+        IScanMetadataWriter? metadataWriter = null)
     {
         this.configProvider = configProvider;
         this.operationStore = operationStore;
         this.imageConverter = imageConverter;
+        this.metadataWriter = metadataWriter ?? UnavailableScanMetadataWriter.Instance;
     }
 
     public ScanProcessor(AgentConfigProvider configProvider, OperationStore operationStore)
@@ -42,6 +45,9 @@ public sealed class ScanProcessor
         var profile = config.Profiles.SingleOrDefault(profile => profile.Id == request.ProfileId)
             ?? throw new InvalidOperationException($"Unknown scanner profile '{request.ProfileId}'.");
         var effectiveOptions = request.Options ?? profile.Options ?? new ScanOptions();
+        // Scanner identity and fallback artist are owned by the local profile, never request.Options.
+        effectiveOptions = effectiveOptions with { Exif = profile.Options?.Exif };
+        var photoMetadata = PhotoMetadata.Resolve(request.Metadata, profile.Options?.Exif);
         var scannerMode = ScannerModes.Normalize(profile.ScannerMode);
         if (scannerMode is null)
         {
@@ -250,6 +256,27 @@ public sealed class ScanProcessor
                             Message = $"BMP-to-TIFF conversion failed: {exception.Message}"
                         });
                         throw;
+                    }
+                }
+
+                if (input.Kind == ScanFileKind.Image && photoMetadata.HasValues)
+                {
+                    try
+                    {
+                        metadataWriter.Write(stagedOutputPath, photoMetadata);
+                        outputSize = new FileInfo(stagedOutputPath).Length;
+                        outputHash = FileSystemSafety.ComputeSha256(stagedOutputPath);
+                    }
+                    catch (Exception exception)
+                    {
+                        manifestsForFailure.Add(new ScanFileManifest
+                        {
+                            SourcePath = input.SourcePath, FileName = Path.GetFileName(input.SourcePath),
+                            SourceSize = copied.Length, SourceSha256 = copied.Sha256, Conversion = conversion,
+                            Kind = input.Kind, Outcome = ScanFileOutcome.Failed,
+                            Message = $"Photo metadata write failed: {exception.Message}"
+                        });
+                        throw new ScanMetadataWriteException($"Could not write photo metadata for '{Path.GetFileName(input.SourcePath)}': {exception.Message}", exception);
                     }
                 }
 

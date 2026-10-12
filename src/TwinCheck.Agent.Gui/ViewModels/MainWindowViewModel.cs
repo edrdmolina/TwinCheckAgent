@@ -77,6 +77,9 @@ public class MainWindowViewModel : ViewModelBase
             this.RaisePropertyChanged(nameof(NamingPattern));
             this.RaisePropertyChanged(nameof(WeeklyDestination));
             this.RaisePropertyChanged(nameof(BmpToTiff));
+            this.RaisePropertyChanged(nameof(MetadataArtist));
+            this.RaisePropertyChanged(nameof(ScannerMake));
+            this.RaisePropertyChanged(nameof(ScannerModel));
             this.RaisePropertyChanged(nameof(SettleStableSeconds));
             this.RaisePropertyChanged(nameof(SettleTimeoutSeconds));
             this.RaisePropertyChanged(nameof(WatchTimeoutSeconds));
@@ -173,6 +176,24 @@ public class MainWindowViewModel : ViewModelBase
             if (SelectedProfile is null) return;
             SelectedProfile.BmpToTiff = value;
         }
+    }
+
+    public string MetadataArtist
+    {
+        get => SelectedProfile?.Exif?.Artist ?? "";
+        set { if (SelectedProfile is not null) SelectedProfile.Exif = (SelectedProfile.Exif ?? new ExifOptions()) with { Artist = value }; }
+    }
+
+    public string ScannerMake
+    {
+        get => SelectedProfile?.Exif?.Make ?? "";
+        set { if (SelectedProfile is not null) SelectedProfile.Exif = (SelectedProfile.Exif ?? new ExifOptions()) with { Make = value }; }
+    }
+
+    public string ScannerModel
+    {
+        get => SelectedProfile?.Exif?.Model ?? "";
+        set { if (SelectedProfile is not null) SelectedProfile.Exif = (SelectedProfile.Exif ?? new ExifOptions()) with { Model = value }; }
     }
 
     public int SettleStableSeconds

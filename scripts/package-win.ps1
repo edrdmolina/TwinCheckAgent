@@ -2,7 +2,8 @@ param(
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64",
     [string]$OutputRoot = "artifacts\win-x64",
-    [string]$PackageVersion = "0.1.0"
+    [string]$PackageVersion = "0.1.0",
+    [string]$ExifToolDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,6 +39,18 @@ dotnet publish (Join-Path $repoRoot "src\TwinCheck.Agent.Gui\TwinCheck.Agent.Gui
 Copy-Item (Join-Path $apiOutput "*") $packageOutput -Recurse -Force
 New-Item -ItemType Directory -Force (Join-Path $packageOutput "gui") | Out-Null
 Copy-Item (Join-Path $guiOutput "*") (Join-Path $packageOutput "gui") -Recurse -Force
+$metadataTools = Join-Path $packageOutput "tools\exiftool"
+if ([string]::IsNullOrWhiteSpace($ExifToolDirectory)) {
+    & (Join-Path $PSScriptRoot "install-exiftool-win.ps1") -Destination $metadataTools -Runtime $Runtime
+} else {
+    if (-not (Test-Path (Join-Path $ExifToolDirectory "exiftool.exe")) -or
+        -not (Test-Path (Join-Path $ExifToolDirectory "exiftool_files"))) {
+        throw "ExifToolDirectory must contain exiftool.exe and its exiftool_files directory."
+    }
+    New-Item -ItemType Directory -Force $metadataTools | Out-Null
+    Copy-Item (Join-Path $ExifToolDirectory "*") $metadataTools -Recurse -Force
+}
+
 Copy-Item (Join-Path $repoRoot "packaging\windows\install.ps1") $packageOutput -Force
 Copy-Item (Join-Path $repoRoot "packaging\windows\uninstall.ps1") $packageOutput -Force
 Copy-Item (Join-Path $repoRoot "packaging\windows\reinstall.ps1") $packageOutput -Force

@@ -62,7 +62,9 @@ cat > "$fake_bin/nix" <<'EOF'
 set -euo pipefail
 
 store_path="$FAKE_NIX_STORE_ROOT/twincheck-gui-libraries"
-mkdir -p "$store_path/lib"
+mkdir -p "$store_path/lib" "$store_path/bin"
+printf '#!/usr/bin/env bash\necho 13.59\n' > "$store_path/bin/exiftool"
+chmod +x "$store_path/bin/exiftool"
 touch "$store_path/lib/libfontconfig.so.1"
 printf '%s\n' "$store_path"
 EOF
@@ -98,6 +100,7 @@ if command -v systemd-analyze >/dev/null 2>&1; then
 fi
 grep -Fq 'ASPNETCORE_Kestrel__Certificates__Default__Path' "$default_install/twincheck-scan-agent-api"
 grep -Fq 'TWINCHECK_AGENT_STATE_DIR=' "$default_install/twincheck-scan-agent-api"
+grep -Fq 'TWINCHECK_EXIFTOOL_PATH=' "$default_install/twincheck-scan-agent-api"
 grep -Fq 'LD_LIBRARY_PATH=' "$default_install/twincheck-scan-agent-gui"
 
 "$package_dir/uninstall.sh"

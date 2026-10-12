@@ -37,7 +37,8 @@ public sealed class HealthService(
     AgentConfigProvider configProvider,
     OperationStore operationStore,
     ScanWatchService? watchService = null,
-    ScanOperationService? operationService = null)
+    ScanOperationService? operationService = null,
+    IScanMetadataWriter? metadataWriter = null)
 {
     public HealthService(AgentConfig config, OperationStore operationStore)
         : this(new AgentConfigProvider(config), operationStore, null)
@@ -80,13 +81,18 @@ public sealed class HealthService(
             warnings.Add($"Profile '{profile.Name}' uses a short polling settle window. Use at least 30 stable seconds and a 600-second settle timeout, or prefer export.done sentinel mode.");
         }
 
+        if (metadataWriter is not null && !metadataWriter.IsAvailable)
+            warnings.Add("ExifTool is unavailable; photo metadata support is disabled. Install ExifTool or set TWINCHECK_EXIFTOOL_PATH.");
+
         return new AgentHealth(
             Ok: profileHealth.Length > 0 && profileHealth.Any(profile => profile.SourceExists && profile.DestinationWritable),
             AgentName: config.AgentName,
             Version: config.Version,
             Hostname: Environment.MachineName,
             AgentUrl: agentUrl,
-            Capabilities: ["async-operations-v1", "wait-for-ready-v1"],
+            Capabilities: metadataWriter?.IsAvailable == true
+                ? ["async-operations-v1", "wait-for-ready-v1", PhotoMetadata.Capability]
+                : ["async-operations-v1", "wait-for-ready-v1"],
             Profiles: profileHealth,
             ActiveProfileId: config.ActiveProfileId,
             NasMounted: writableRoots.Length > 0,

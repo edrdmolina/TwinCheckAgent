@@ -1,6 +1,6 @@
 # TwinCheck Scan Agent — Windows 10
 
-This package is self-contained; the scanner computer does not need .NET installed.
+This package includes .NET and ExifTool with its Perl runtime; the scanner computer does not need either installed separately. Keep the complete `tools/exiftool` directory with the app. Photo metadata support appears as `scan-metadata-v1` in health.
 
 ## Install
 

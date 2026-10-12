@@ -35,6 +35,22 @@ jobs:
         with:
           dotnet-version: 9.0.x
 
+      - name: Install ExifTool (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libimage-exiftool-perl
+
+      - name: Install ExifTool (macOS)
+        if: runner.os == 'macOS'
+        run: brew install exiftool
+
+      - name: Install ExifTool (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:RUNNER_TEMP "exiftool"
+          ./scripts/install-exiftool-win.ps1 -Destination $destination
+          "TWINCHECK_EXIFTOOL_PATH=$(Join-Path $destination 'exiftool.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Show .NET info
         run: dotnet --info
 
@@ -56,6 +72,12 @@ jobs:
       - name: Test
         run: dotnet test tests/TwinCheck.Agent.Tests/TwinCheck.Agent.Tests.csproj --configuration Release --no-build --nologo --logger "trx;LogFileName=test-results.trx"
 
+      - name: Verify HTTP SQLite lifecycle
+        run: python tests/api/sqlite-lifecycle.py --api src/TwinCheck.Agent.Api/bin/Release/net9.0/TwinCheck.Agent.Api.dll
+
+      - name: Verify HTTP metadata lifecycle
+        run: python tests/api/metadata-lifecycle.py --api src/TwinCheck.Agent.Api/bin/Release/net9.0/TwinCheck.Agent.Api.dll
+
       - name: Validate NixOS installer lifecycle
         if: runner.os == 'Linux'
         run: bash tests/installers/nixos-lifecycle.sh
@@ -65,7 +87,7 @@ jobs:
         shell: pwsh
         run: |
           $failed = $false
-          Get-ChildItem packaging/windows/*.ps1, scripts/package-win.ps1 | ForEach-Object {
+          Get-ChildItem packaging/windows/*.ps1, scripts/package-win.ps1, scripts/install-exiftool-win.ps1 | ForEach-Object {
             $tokens = $null
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null

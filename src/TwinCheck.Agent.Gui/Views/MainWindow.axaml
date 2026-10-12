@@ -151,6 +151,22 @@
 
                             <Border Classes="card">
                                 <StackPanel Spacing="14">
+                                    <TextBlock Text="Photo Metadata" FontSize="17" FontWeight="SemiBold"/>
+                                    <TextBlock Text="Customer name and film stock come from TwinCheckN. Set the scanner identity for this profile here." TextWrapping="Wrap" Foreground="#64748B"/>
+                                    <Grid ColumnDefinitions="160,*" RowDefinitions="Auto,Auto,Auto">
+                                        <TextBlock Grid.Row="0" Text="Scanner make" FontWeight="SemiBold"/>
+                                        <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding ScannerMake, Mode=TwoWay}" Watermark="Fujifilm"/>
+                                        <TextBlock Grid.Row="1" Margin="0,12,0,0" Text="Scanner model" FontWeight="SemiBold"/>
+                                        <TextBox Grid.Row="1" Grid.Column="1" Margin="0,12,0,0" Text="{Binding ScannerModel, Mode=TwoWay}" Watermark="SP500"/>
+                                        <TextBlock Grid.Row="2" Margin="0,12,0,0" Text="Fallback artist" FontWeight="SemiBold"/>
+                                        <TextBox Grid.Row="2" Grid.Column="1" Margin="0,12,0,0" Text="{Binding MetadataArtist, Mode=TwoWay}" Watermark="Optional; used when customer name is absent"/>
+                                    </Grid>
+                                    <TextBlock Text="Leave fields blank to preserve existing tags. BMP images need TIFF conversion to store metadata." TextWrapping="Wrap" Foreground="#64748B"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Classes="card">
+                                <StackPanel Spacing="14">
                                     <TextBlock Text="Output + Watch Timing" FontSize="17" FontWeight="SemiBold"/>
                                     <Grid ColumnDefinitions="160,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto">
                                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Naming pattern" FontWeight="SemiBold"/>

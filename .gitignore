@@ -14,3 +14,5 @@ artifacts/
 *.log
 
 .fake
+
+__pycache__/

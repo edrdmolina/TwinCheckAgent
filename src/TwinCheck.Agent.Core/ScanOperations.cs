@@ -1,8 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
 
 namespace TwinCheck.Agent.Core;
 
@@ -147,145 +144,6 @@ public sealed record ScanJobSummary(
 
 public sealed record EnqueueScanOperationResult(ScanOperationState Operation, bool Created, bool Conflict);
 
-public sealed class ScanOperationStore
-{
-    public const string StateDirectoryEnvironmentVariable = "TWINCHECK_AGENT_STATE_DIR";
-
-    private readonly ConcurrentDictionary<string, ScanOperationState> operations = new(StringComparer.Ordinal);
-    private readonly JsonSerializerOptions jsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
-    private readonly object gate = new();
-    private readonly LocalAgentLogger? logger;
-
-    public ScanOperationStore(LocalAgentLogger logger)
-        : this(DefaultStateDirectory, logger)
-    {
-    }
-
-    public ScanOperationStore(string stateDirectory, LocalAgentLogger? logger = null)
-    {
-        StateDirectory = Path.GetFullPath(stateDirectory);
-        OperationsDirectory = Path.Combine(StateDirectory, "operations");
-        this.logger = logger;
-        LoadExisting();
-    }
-
-    public static string DefaultStateDirectory
-    {
-        get
-        {
-            var configuredPath = Environment.GetEnvironmentVariable(StateDirectoryEnvironmentVariable);
-            if (!string.IsNullOrWhiteSpace(configuredPath))
-            {
-                return Path.GetFullPath(configuredPath);
-            }
-
-            return Directory.GetParent(LocalAgentLogger.DefaultLogDirectory)?.FullName
-                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TwinCheck", "ScanAgent");
-        }
-    }
-
-    public string StateDirectory { get; }
-    public string OperationsDirectory { get; }
-
-    public EnqueueScanOperationResult Enqueue(ProcessScanRequest request)
-    {
-        if (string.IsNullOrWhiteSpace(request.IdempotencyKey))
-        {
-            throw new ArgumentException("Idempotency key is required.", nameof(request));
-        }
-
-        var fingerprint = Fingerprint(request);
-        lock (gate)
-        {
-            if (operations.TryGetValue(request.IdempotencyKey, out var existing))
-            {
-                return new EnqueueScanOperationResult(
-                    existing,
-                    Created: false,
-                    Conflict: !string.Equals(existing.RequestFingerprint, fingerprint, StringComparison.Ordinal));
-            }
-
-            var operation = new ScanOperationState
-            {
-                OperationId = request.IdempotencyKey,
-                IdempotencyKey = request.IdempotencyKey,
-                RequestFingerprint = fingerprint,
-                Request = request,
-                Message = "Scan operation queued."
-            };
-            operations[operation.IdempotencyKey] = operation;
-            Write(operation);
-            return new EnqueueScanOperationResult(operation, Created: true, Conflict: false);
-        }
-    }
-
-    public ScanOperationState Get(string idempotencyKey) =>
-        operations.TryGetValue(idempotencyKey, out var operation)
-            ? operation
-            : throw new KeyNotFoundException($"Unknown scan operation '{idempotencyKey}'.");
-
-    public IReadOnlyList<ScanOperationState> List() =>
-        operations.Values.OrderByDescending(operation => operation.CreatedAt).ToArray();
-
-    public ScanOperationState Update(string idempotencyKey, Func<ScanOperationState, ScanOperationState> update)
-    {
-        lock (gate)
-        {
-            var current = Get(idempotencyKey);
-            var next = update(current);
-            operations[idempotencyKey] = next;
-            Write(next);
-            return next;
-        }
-    }
-
-    private void LoadExisting()
-    {
-        if (!Directory.Exists(OperationsDirectory))
-        {
-            return;
-        }
-
-        foreach (var path in Directory.EnumerateFiles(OperationsDirectory, "operation-*.json"))
-        {
-            try
-            {
-                var operation = JsonSerializer.Deserialize<ScanOperationState>(File.ReadAllText(path), jsonOptions);
-                if (operation is not null && !string.IsNullOrWhiteSpace(operation.IdempotencyKey))
-                {
-                    operations[operation.IdempotencyKey] = operation;
-                }
-            }
-            catch (Exception exception)
-            {
-                logger?.Warning($"Skipped unreadable scan operation state '{path}': {exception.Message}");
-            }
-        }
-    }
-
-    private void Write(ScanOperationState operation)
-    {
-        Directory.CreateDirectory(OperationsDirectory);
-        var path = GetPath(operation.IdempotencyKey);
-        var temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
-        File.WriteAllText(temporaryPath, JsonSerializer.Serialize(operation, jsonOptions));
-        File.Move(temporaryPath, path, overwrite: true);
-    }
-
-    private string GetPath(string idempotencyKey)
-    {
-        var safeKey = string.Concat(idempotencyKey.Select(character => char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '-'));
-        var suffix = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(idempotencyKey))).ToLowerInvariant()[..12];
-        return Path.Combine(OperationsDirectory, $"operation-{safeKey}-{suffix}.json");
-    }
-
-    private string Fingerprint(ProcessScanRequest request)
-    {
-        var json = JsonSerializer.Serialize(request, jsonOptions);
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json))).ToLowerInvariant();
-    }
-}
-
 public sealed class ScanOperationService : IDisposable
 {
     private readonly ScanOperationStore store;
@@ -299,6 +157,7 @@ public sealed class ScanOperationService : IDisposable
     private readonly SemaphoreSlim processingGate = new(1, 1);
     private readonly CancellationTokenSource cancellation = new();
     private readonly object executionGate = new();
+    private readonly Task maintenance;
 
     public ScanOperationService(
         ScanOperationStore store,
@@ -312,7 +171,7 @@ public sealed class ScanOperationService : IDisposable
         readinessCoordinator = watchService.ReadinessCoordinator;
         this.logger = logger;
 
-        foreach (var operation in store.List().Where(operation => !ScanOperationStatuses.IsTerminal(operation.Status)))
+        foreach (var operation in store.ListActive())
         {
             store.Update(operation.IdempotencyKey, current => current with
             {
@@ -321,6 +180,7 @@ public sealed class ScanOperationService : IDisposable
             });
             Schedule(operation.IdempotencyKey);
         }
+        maintenance = RunMaintenanceAsync();
     }
 
     public EnqueueScanOperationResult Enqueue(ProcessScanRequest request)
@@ -337,24 +197,11 @@ public sealed class ScanOperationService : IDisposable
     public ScanOperationState Get(string idempotencyKey) => store.Get(idempotencyKey);
 
     public IReadOnlyList<ScanOperationView> ListActive() =>
-        store.List()
-            .Where(operation => !ScanOperationStatuses.IsTerminal(operation.Status))
+        store.ListActive()
             .Select(operation => operation.ToView())
             .ToArray();
 
-    public IReadOnlyList<ScanJobSummary> ListRecent(int limit = 100)
-    {
-        var operations = store.List();
-        return operations
-            .Where(operation => !ScanOperationStatuses.IsTerminal(operation.Status))
-            .Concat(operations
-                .Where(operation => ScanOperationStatuses.IsTerminal(operation.Status))
-                .Take(Math.Clamp(limit, 1, 500)))
-            .OrderBy(operation => ScanOperationStatuses.IsTerminal(operation.Status))
-            .ThenByDescending(operation => operation.CreatedAt)
-            .Select(operation => operation.ToSummary())
-            .ToArray();
-    }
+    public IReadOnlyList<ScanJobSummary> ListRecent(int limit = 100) => store.ListRecent(limit);
 
     public ScanOperationView? Cancel(string idempotencyKey)
     {
@@ -406,13 +253,36 @@ public sealed class ScanOperationService : IDisposable
         cancellation.Cancel();
         try
         {
-            Task.WaitAll(running.Values.ToArray(), TimeSpan.FromSeconds(5));
+            Task.WaitAll(running.Values.Append(maintenance).ToArray(), TimeSpan.FromSeconds(5));
         }
         catch
         {
             // The persisted operation will be recovered on the next start.
         }
         cancellation.Dispose();
+    }
+
+    private async Task RunMaintenanceAsync()
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromHours(1));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellation.Token))
+            {
+                try
+                {
+                    store.Cleanup();
+                }
+                catch (Exception exception)
+                {
+                    logger.Error("Job history cleanup failed; it will be retried next hour.", exception);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            // Normal service shutdown.
+        }
     }
 
     private void Schedule(string idempotencyKey)
@@ -542,6 +412,12 @@ public sealed class ScanOperationService : IDisposable
         {
             var current = store.Get(idempotencyKey);
             FailOperation(current, exception.Message, exception.Code, current.Candidate?.Path);
+        }
+        catch (ScanMetadataWriteException exception)
+        {
+            var current = store.Get(idempotencyKey);
+            FailOperation(current, exception.Message, "metadata-write-failed", current.ResolvedSourceDir ?? current.Candidate?.Path);
+            logger.Error($"Photo metadata failed for scan operation {idempotencyKey}.", exception);
         }
         catch (MultipleSourceCandidatesException exception)
         {

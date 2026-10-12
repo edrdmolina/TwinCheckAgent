@@ -1,0 +1,26 @@
+{
+  "description": "Captured from the pre-metadata Scanner Agent API (SQLite implementation).",
+  "request": {
+    "idempotencyKey": "legacy-fixture",
+    "profileId": "legacy-scanner",
+    "sourceDir": null,
+    "destinationDir": null,
+    "orderNumber": "B31009",
+    "rollNumber": "1",
+    "naming": null,
+    "scanKind": "original",
+    "rescanNumber": null,
+    "options": {
+      "bmpToTiff": true,
+      "exif": {
+        "artist": "Coastal Film Lab",
+        "make": "Noritsu",
+        "model": "HS-1800"
+      }
+    },
+    "watchId": null,
+    "waitForReady": true,
+    "dryRun": false
+  },
+  "requestFingerprint": "e67e1e489630c2c18fead1211f4ef63392b9d2e033b9a1a6b3591eb1e04f73b5"
+}

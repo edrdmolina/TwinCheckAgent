@@ -25,6 +25,8 @@ The processor currently implements these rules:
 - Write a per-operation JSON manifest beside the committed roll folder.
 - Queue long-running scans and persist operation progress so browser timeouts or agent restarts do not lose completion state.
 - View recent jobs and their statuses in the agent GUI; cancel queued, watching, or settling jobs before file processing starts.
+- Store job tracking in local SQLite, with 30-day finished-job history, 180-day duplicate-request protection, and automatic migration from legacy job JSON files.
+- Embed customer name, film stock, and local scanner identity in delivered photo metadata; expose `scan-metadata-v1` when ExifTool is available.
 
 Destination folders use:
 
@@ -130,6 +132,5 @@ See [Windows 10 test install](docs/WINDOWS_TEST_INSTALL.md) and [NixOS test inst
 
 ## Near-Term Work
 
-- Add EXIF-on-copy processing.
 - Add a packaged installer for macOS.
 - Upgrade the Avalonia template packages to the current supported line.
