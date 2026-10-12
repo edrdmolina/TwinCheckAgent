@@ -52,4 +52,22 @@ public static class LocalAgentConfigStore
         File.WriteAllText(ConfigPath, JsonSerializer.Serialize(config, JsonOptions));
         new LocalAgentLogger().Info($"Saved local agent config to {ConfigPath}");
     }
+
+    /// <summary>
+    /// Writes an empty config with a unique API key when none exists, so a fresh install
+    /// never runs with a shared default key. Returns true when a config was created.
+    /// </summary>
+    public static bool CreateIfMissing(string? path = null)
+    {
+        path ??= ConfigPath;
+        if (File.Exists(path)) return false;
+
+        var config = new AgentConfig { AgentName = "TwinCheck Scan Agent", ApiKey = GenerateApiKey() };
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, JsonSerializer.Serialize(config, JsonOptions));
+        return true;
+    }
+
+    public static string GenerateApiKey() =>
+        $"tcn-{Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24)).ToLowerInvariant()}";
 }

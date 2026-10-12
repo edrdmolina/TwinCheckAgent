@@ -470,7 +470,7 @@ public class MainWindowViewModel : ViewModelBase
 
     public void GenerateApiKey()
     {
-        ApiKey = $"tcn-{Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24)).ToLowerInvariant()}";
+        ApiKey = LocalAgentConfigStore.GenerateApiKey();
         StatusMessage = "Generated a new API key. Save profile and update TwinCheckN browser settings.";
         this.RaisePropertyChanged(nameof(ApiKeyWarning));
     }
