@@ -49,7 +49,7 @@ so it updates to any newer published release.
 3. `curl.exe https://localhost:3625/` succeeds without `-k`.
 4. Copy the API key from **Setup** into TwinCheckN and run a scan.
 5. Sign out and back in. The app starts minimized in the tray.
-6. Run `Setup.exe` again. It shows the existing window instead of starting a second agent.
+6. With the app in the tray, open it from the Start menu. The existing window appears instead of a second agent starting.
 
 **Upgrade from the service version**, on a machine with the old `Install-TwinCheck.cmd` install:
 
