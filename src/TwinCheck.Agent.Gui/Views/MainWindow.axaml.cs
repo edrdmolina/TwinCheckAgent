@@ -58,6 +58,23 @@ namespace TwinCheck.Agent.Gui.Views
             }
         }
 
+        private async void AgentAction_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            if (OperatingSystem.IsWindows() && DataContext is MainWindowViewModel { Agent: { } agent } viewModel)
+            {
+                await agent.RunActionAsync();
+                await viewModel.RefreshAsync();
+            }
+        }
+
+        private async void ApplyUpdate_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            if (OperatingSystem.IsWindows() && DataContext is MainWindowViewModel { Updater: { } updater })
+            {
+                await updater.ApplyAsync();
+            }
+        }
+
         private async void Refresh_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         {
             if (DataContext is MainWindowViewModel viewModel)

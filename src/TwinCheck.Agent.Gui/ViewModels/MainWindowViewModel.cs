@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using ReactiveUI;
 using TwinCheck.Agent.Core;
+using TwinCheck.Agent.Gui.Desktop;
 
 namespace TwinCheck.Agent.Gui.ViewModels;
 
@@ -37,10 +38,26 @@ public class MainWindowViewModel : ViewModelBase
         Load();
     }
 
+    /// <summary>Windows tray app: the API runs in this process and updates come from GitHub Releases.</summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public MainWindowViewModel(DesktopAgent agent, AppUpdater updater)
+        : this()
+    {
+        Agent = agent;
+        Updater = updater;
+    }
+
+    public DesktopAgent? Agent { get; }
+    public AppUpdater? Updater { get; }
+    public bool RunsAgentInProcess => Agent is not null;
+
     public string AgentUrl => "https://localhost:3625";
     public string ConfigPath => LocalAgentConfigStore.ConfigPath;
     public string LogDirectory => LocalAgentLogger.DefaultLogDirectory;
-    public string SetupServiceName => OperatingSystem.IsWindows() ? "TwinCheck Scan Agent" : "twincheck-scan-agent";
+    public string SetupServiceName => RunsAgentInProcess ? "TwinCheck Scan Agent (tray app)" : "twincheck-scan-agent";
+    public string AgentRestartGuidance => RunsAgentInProcess
+        ? "The agent runs inside this app and starts when you sign in to Windows. Closing the window keeps it running in the tray; use Quit from the tray icon menu to stop it."
+        : "The agent runs as the twincheck-scan-agent systemd user service. Restart it with: systemctl --user restart twincheck-scan-agent.service";
     public ObservableCollection<ProfileEditor> Profiles { get; } = [];
     public ObservableCollection<ScanJobRow> ScanJobs { get; } = [];
     public ObservableCollection<ScannerModeOption> ScannerModeOptions { get; } =
@@ -619,7 +636,7 @@ public class MainWindowViewModel : ViewModelBase
         {
             ApiStatus = "API key mismatch";
             ApiStatusColor = "#DC2626";
-            ApiStatusDetail = "The GUI API key does not match the local service configuration.";
+            ApiStatusDetail = "The GUI API key does not match the local agent configuration.";
             ReadinessSummary = "Open Setup, generate or enter the shared API key, then save the config.";
             DiagnosticsText = "API authentication failed (401 Unauthorized). Save the shared API key and refresh.";
         }
@@ -628,7 +645,9 @@ public class MainWindowViewModel : ViewModelBase
             ApiStatus = "API unreachable";
             ApiStatusColor = "#DC2626";
             ApiStatusDetail = exception.Message;
-            ReadinessSummary = $"Start or restart the {SetupServiceName} service, then refresh.";
+            ReadinessSummary = RunsAgentInProcess
+                ? "The agent inside this app isn't answering. Check the message at the top of Overview, then refresh."
+                : $"Start or restart the {SetupServiceName} service, then refresh.";
             DiagnosticsText = $"API check failed: {exception.Message}";
         }
     }

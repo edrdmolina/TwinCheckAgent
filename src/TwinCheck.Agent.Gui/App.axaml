@@ -66,6 +66,19 @@
             <Setter Property="Padding" Value="18"/>
         </Style>
 
+        <Style Selector="Border.banner">
+            <Setter Property="Background" Value="#FEF3C7"/>
+            <Setter Property="BorderBrush" Value="#FCD34D"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="16,12"/>
+        </Style>
+
+        <Style Selector="Border.banner.update">
+            <Setter Property="Background" Value="#DBEAFE"/>
+            <Setter Property="BorderBrush" Value="#93C5FD"/>
+        </Style>
+
         <Style Selector="Border.pill">
             <Setter Property="CornerRadius" Value="999"/>
             <Setter Property="Padding" Value="10,4"/>

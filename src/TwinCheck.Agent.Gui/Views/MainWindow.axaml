@@ -46,7 +46,7 @@
             </DockPanel>
         </Border>
 
-        <Grid Grid.Column="1" RowDefinitions="Auto,*" Margin="28">
+        <Grid Grid.Column="1" RowDefinitions="Auto,Auto,*" Margin="28">
             <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,22">
                 <StackPanel DockPanel.Dock="Left" Spacing="4">
                     <TextBlock Text="{Binding PageTitle}" FontSize="26" FontWeight="SemiBold" Foreground="#0F172A"/>
@@ -60,7 +60,29 @@
                 </StackPanel>
             </DockPanel>
 
-            <ScrollViewer Grid.Row="1">
+            <StackPanel Grid.Row="1" Spacing="12" Margin="0,0,0,16">
+                <Border Classes="banner" IsVisible="{Binding Agent.BannerVisible, FallbackValue=False}">
+                    <DockPanel LastChildFill="True">
+                        <Button DockPanel.Dock="Right" Margin="16,0,0,0" VerticalAlignment="Center"
+                                Content="{Binding Agent.ActionLabel}"
+                                IsVisible="{Binding Agent.ActionVisible, FallbackValue=False}"
+                                IsEnabled="{Binding Agent.ActionEnabled, FallbackValue=False}"
+                                Click="AgentAction_Click"/>
+                        <TextBlock Text="{Binding Agent.BannerText}" TextWrapping="Wrap" VerticalAlignment="Center" Foreground="#78350F"/>
+                    </DockPanel>
+                </Border>
+                <Border Classes="banner update" IsVisible="{Binding Updater.BannerVisible, FallbackValue=False}">
+                    <DockPanel LastChildFill="True">
+                        <Button DockPanel.Dock="Right" Classes="primary" Margin="16,0,0,0" VerticalAlignment="Center"
+                                Content="Restart to update"
+                                IsEnabled="{Binding Updater.CanApply, FallbackValue=False}"
+                                Click="ApplyUpdate_Click"/>
+                        <TextBlock Text="{Binding Updater.BannerText}" TextWrapping="Wrap" VerticalAlignment="Center" Foreground="#1E3A8A"/>
+                    </DockPanel>
+                </Border>
+            </StackPanel>
+
+            <ScrollViewer Grid.Row="2">
                 <Grid>
                     <StackPanel IsVisible="{Binding IsOverviewVisible}" Spacing="16">
                         <Grid ColumnDefinitions="*,*,*" RowDefinitions="Auto">
@@ -95,7 +117,7 @@
                         <Border Classes="card">
                             <StackPanel Spacing="10">
                                 <TextBlock Text="Setup Guidance" FontSize="17" FontWeight="SemiBold"/>
-                                <TextBlock Text="If the API is unreachable, start or restart the local scan agent service, then click Refresh." TextWrapping="Wrap" Foreground="#475569"/>
+                                <TextBlock Text="{Binding AgentRestartGuidance}" TextWrapping="Wrap" Foreground="#475569"/>
                                 <TextBlock Text="{Binding SetupServiceName}" FontWeight="SemiBold" Foreground="#2563EB"/>
                             </StackPanel>
                         </Border>
@@ -286,10 +308,9 @@
 
                         <Border Classes="card">
                             <StackPanel Spacing="10">
-                                <TextBlock Text="Service Guidance" FontSize="17" FontWeight="SemiBold"/>
-                                <TextBlock Text="This GUI detects the API but does not start or stop OS services yet. Installers will add direct service controls later." TextWrapping="Wrap"/>
+                                <TextBlock Text="How the Agent Runs" FontSize="17" FontWeight="SemiBold"/>
                                 <TextBlock Text="{Binding SetupServiceName}" FontWeight="SemiBold" Foreground="#2563EB"/>
-                                <TextBlock Text="Linux/NixOS: restart the twincheck-scan-agent service. Windows 10: restart the future TwinCheck Scan Agent service." TextWrapping="Wrap" Foreground="#475569"/>
+                                <TextBlock Text="{Binding AgentRestartGuidance}" TextWrapping="Wrap" Foreground="#475569"/>
                             </StackPanel>
                         </Border>
                     </StackPanel>

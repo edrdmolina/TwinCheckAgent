@@ -29,20 +29,22 @@ public static class LocalAgentConfigStore
         }
     }
 
-    public static AgentConfig LoadOrDefault(AgentConfig fallback)
+    public static AgentConfig LoadOrDefault(AgentConfig fallback) => TryLoad(ConfigPath) ?? fallback;
+
+    public static AgentConfig? TryLoad(string path)
     {
-        if (!File.Exists(ConfigPath))
+        if (!File.Exists(path))
         {
-            return fallback;
+            return null;
         }
 
         try
         {
-            return JsonSerializer.Deserialize<AgentConfig>(File.ReadAllText(ConfigPath), JsonOptions) ?? fallback;
+            return JsonSerializer.Deserialize<AgentConfig>(File.ReadAllText(path), JsonOptions);
         }
         catch
         {
-            return fallback;
+            return null;
         }
     }
 
