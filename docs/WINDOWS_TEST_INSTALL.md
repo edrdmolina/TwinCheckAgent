@@ -1,106 +1,73 @@
-# Windows 10 Test Install
+# Windows Test Install
 
-This is the repeatable package/install/uninstall path for Noritsu and Frontier SP3000 validation.
+How to build, release, and test the per-user Windows installer. Operator instructions are in
+[packaging/windows/README.md](../packaging/windows/README.md).
 
-## Build the package
+## Publish a release
 
-From the repository root in PowerShell:
+Releases are built by GitHub Actions. Tag a commit on `master` and push the tag:
 
-```powershell
-.\scripts\package-win.ps1
+```bash
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
-To label a build with another version:
+The [Release workflow](../.github/workflows/release.yml) runs the tests, builds
+`TwinCheckScanAgent-win-Setup.exe` and the update packages (including a delta from the
+previous release), publishes the GitHub release, and attaches the NixOS tarball. Installed
+Windows agents find the release within 6 hours and offer **Restart to update**.
+
+Tags must be SemVer: `v1.2.3`, or `v1.2.3-beta.1` for a pre-release. Agents only update to
+stable releases.
+
+## Build locally
+
+From the repository root in PowerShell, with the [vpk](https://docs.velopack.io) tool installed
+(`dotnet tool install -g vpk`):
 
 ```powershell
-.\scripts\package-win.ps1 -PackageVersion 0.1.1
+.\scripts\package-win.ps1 -PackageVersion 0.2.0
 ```
 
-The build produces both an unpacked directory and a transfer-ready ZIP:
+Output:
 
 ```text
-artifacts\win-x64\package
-artifacts\win-x64\TwinCheck-Scan-Agent-0.1.0-win-x64.zip
+artifacts\win-x64\releases\TwinCheckScanAgent-win-Setup.exe
+artifacts\win-x64\releases\TwinCheckScanAgent-0.2.0-full.nupkg
+artifacts\win-x64\releases\releases.win.json
 ```
 
-The package is self-contained, so Windows 10 does not need .NET installed.
+A locally built `Setup.exe` installs and runs normally. It still checks GitHub for updates,
+so it updates to any newer published release.
 
-## Install
+## Test checklist
 
-1. Copy the ZIP to the Windows 10 scanner computer.
-2. Extract the entire ZIP.
-3. Double-click `Install-TwinCheck.cmd`.
-4. Approve the administrator prompt.
+**Fresh install**, on a machine that never had TwinCheck:
 
-For a NAS/UNC destination, use an elevated PowerShell window so you can supply the service account:
+1. Run `Setup.exe`. Expect no administrator prompt.
+2. Accept the certificate prompt. The tray icon appears and the window opens.
+3. `curl.exe https://localhost:3625/` succeeds without `-k`.
+4. Copy the API key from **Setup** into TwinCheckN and run a scan.
+5. Sign out and back in. The app starts minimized in the tray.
+6. Run `Setup.exe` again. It shows the existing window instead of starting a second agent.
 
-```powershell
-$cred = Get-Credential
-.\install.ps1 -ServiceCredential $cred
-```
+**Upgrade from the service version**, on a machine with the old `Install-TwinCheck.cmd` install:
 
-The installer uses shared machine paths:
+1. Run `Setup.exe`. The banner asks to remove the old version.
+2. Start a scan through the old service, then click **Remove old version**. Expect the app to
+   refuse until the job finishes.
+3. Click it again and approve the prompt. `Get-Service "TwinCheck Scan Agent"` now fails, and
+   the old Program Files folder and the machine-wide `TWINCHECK_AGENT_*` environment variables are gone.
+4. The same API key and profiles appear in **Setup**, and old jobs appear in **Jobs**.
 
-```text
-C:\Program Files\TwinCheck\ScanAgent
-C:\ProgramData\TwinCheck\ScanAgent\agent-config.json
-C:\ProgramData\TwinCheck\ScanAgent\logs
-C:\ProgramData\TwinCheck\ScanAgent\operations
-```
+**Update**:
 
-It also creates and trusts the local HTTPS certificate, creates a shared config
-with a unique API key when needed, installs the Windows service, creates
-desktop/Start menu shortcuts, and registers the app under **Settings > Apps**.
-Reinstall preserves the shared key and profiles.
+1. With an older version installed, push a newer tag.
+2. Wait for the update banner, or restart the app to check sooner.
+3. Start a job. **Restart to update** stays disabled until it finishes.
+4. Click it. The app restarts, and `/api/scan/health` reports the new version.
 
-## Configure and verify
-
-1. Open TwinCheck Scan Agent from the desktop or Start menu.
-2. Generate or confirm the API key.
-3. Create the Noritsu and/or Frontier profile.
-4. Set source and destination folders and save.
-5. Click **Refresh** and confirm the API is connected.
-
-```powershell
-Get-Service "TwinCheck Scan Agent"
-curl.exe -k https://localhost:3625/
-curl.exe -k -H "X-Api-Key: YOUR_API_KEY" https://localhost:3625/api/scan/health
-```
-
-## Reinstall
-
-Build and extract the replacement ZIP, then double-click `Reinstall-TwinCheck.cmd`. Profiles, logs, and durable operation records are preserved.
-
-For a NAS/UNC service account:
-
-```powershell
-$cred = Get-Credential
-.\reinstall.ps1 -ServiceCredential $cred
-```
-
-If PowerShell reports that running scripts is disabled, allow scripts only for
-the current PowerShell session, unblock the downloaded script, and retry in the
-same window so `$cred` remains available:
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-Unblock-File .\reinstall.ps1
-.\reinstall.ps1 -ServiceCredential $cred
-```
-
-The `Process` policy expires when that PowerShell window closes. Only bypass
-the policy when the package came from a trusted source. If the command is still
-blocked, run `Get-ExecutionPolicy -List`; a defined `MachinePolicy` or
-`UserPolicy` is controlled by Group Policy and requires an administrator.
-
-## Uninstall
-
-Use **Settings > Apps**, the Start menu uninstall shortcut, or double-click `Uninstall-TwinCheck.cmd` in the extracted package.
-
-The default uninstall preserves profiles and logs. For a completely clean test:
-
-```powershell
-.\uninstall.ps1 -PurgeData
-```
-
-See the `README.md` included in the ZIP for service-account and certificate troubleshooting.
+**Uninstall**: **Settings > Apps > TwinCheck Scan Agent > Uninstall** removes
+`%LocalAppData%\TwinCheckScanAgent` and the `TwinCheckScanAgent` value under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. `%AppData%\TwinCheck\ScanAgent` is kept.
+Delete it for a clean retest.

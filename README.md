@@ -112,12 +112,25 @@ Run tests:
 ./scripts/test.sh
 ```
 
-## Build Installers
+## Install and Release
 
-Build a self-contained Windows 10 ZIP from PowerShell:
+**Windows:** operators run `TwinCheckScanAgent-win-Setup.exe` from the latest
+[release](https://github.com/edrdmolina/TwinCheckAgent/releases/latest). It installs for the
+signed-in user without admin rights, runs the agent inside a tray app that starts at sign-in,
+and updates itself from GitHub Releases. See [packaging/windows/README.md](packaging/windows/README.md).
+
+**Publishing an update:** push a version tag. The [Release workflow](.github/workflows/release.yml)
+tests, builds the Windows installer and update packages plus the NixOS tarball, and publishes
+the GitHub release. Installed Windows agents pick it up within 6 hours.
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+Build the Windows installer locally (requires `dotnet tool install -g vpk`):
 
 ```powershell
-.\scripts\package-win.ps1
+.\scripts\package-win.ps1 -PackageVersion 0.2.0
 ```
 
 Build the NixOS package and `.tar.gz`:
@@ -126,11 +139,12 @@ Build the NixOS package and `.tar.gz`:
 ./scripts/package-nixos.sh
 ```
 
-The NixOS target intentionally uses the .NET 9 runtime from Nix; install it on the scanner computer with `nix profile install nixpkgs#dotnet-sdk_9`. Both packages contain install, reinstall, and uninstall commands. Uninstall preserves profiles/logs unless the purge option is selected.
+The NixOS target intentionally uses the .NET 9 runtime from Nix; install it on the scanner computer with `nix profile install nixpkgs#dotnet-sdk_9`. The NixOS package contains install, reinstall, and uninstall commands. Uninstall preserves profiles/logs unless the purge option is selected.
 
-See [Windows 10 test install](docs/WINDOWS_TEST_INSTALL.md) and [NixOS test install](docs/NIXOS_TEST_INSTALL.md) for the transfer and test workflow.
+See [Windows test install](docs/WINDOWS_TEST_INSTALL.md) and [NixOS test install](docs/NIXOS_TEST_INSTALL.md) for the build and test workflow.
 
 ## Near-Term Work
 
 - Add a packaged installer for macOS.
+- Code-sign the Windows installer so SmartScreen doesn't warn on first install.
 - Upgrade the Avalonia template packages to the current supported line.

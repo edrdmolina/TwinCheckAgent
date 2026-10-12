@@ -2,10 +2,14 @@
 
 ## Install And Run
 
-The agent has two processes:
+The agent has two parts:
 
 - API: local HTTPS service at `https://localhost:3625`
 - GUI: local dashboard for profiles, health diagnostics, logs, and setup guidance
+
+On Windows both run in one tray app installed per user; see
+[packaging/windows/README.md](../packaging/windows/README.md). On Linux and NixOS the API runs as
+a separate service and the GUI connects to it.
 
 For Ubuntu testing:
 
@@ -75,7 +79,7 @@ To stop a pending job, select it, click **Cancel Selected Job**, then confirm. C
 
 Job tracking lives in `jobs.sqlite3` in the agent state directory:
 
-- Windows installer: `C:\ProgramData\TwinCheck\ScanAgent\jobs.sqlite3`
+- Windows: `%AppData%\TwinCheck\ScanAgent\jobs.sqlite3` (older service installs used `C:\ProgramData\TwinCheck\ScanAgent`; the tray app copies that data on first start)
 - NixOS installer: `~/.local/state/TwinCheck/ScanAgent/jobs.sqlite3` (or the configured XDG state directory)
 - `TWINCHECK_AGENT_STATE_DIR` overrides the state directory on either platform.
 
@@ -87,7 +91,7 @@ During the remaining key-retention period, fetching or re-submitting an identica
 
 On the first startup after upgrading, the agent automatically imports existing `operations/operation-*.json` files. Each readable file is removed only after its database transaction commits. Repeating an interrupted migration preserves newer database state. Unreadable legacy files are left in place and logged for inspection; conflicting records or failures to retire imported files stop startup so they can be resolved. Imported history is subject to the same retention policy.
 
-Use **Cancel Selected Job** to cancel waiting jobs. Moving old JSON files no longer controls jobs after migration. Stop the API service before copying `jobs.sqlite3` for an offline backup; do not delete the database to cancel a job, because that also discards retained keys and recovery state. Keep the database on the scanner's local disk.
+Use **Cancel Selected Job** to cancel waiting jobs. Moving old JSON files no longer controls jobs after migration. Stop the agent (Windows: **Quit** from the tray icon; Linux: stop the service) before copying `jobs.sqlite3` for an offline backup; do not delete the database to cancel a job, because that also discards retained keys and recovery state. Keep the database on the scanner's local disk.
 
 Preview Folders remains available for manual verification and troubleshooting.
 

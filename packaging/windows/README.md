@@ -1,130 +1,94 @@
-# TwinCheck Scan Agent — Windows 10
+# TwinCheck Scan Agent — Windows 10/11
 
-This package includes .NET and ExifTool with its Perl runtime; the scanner computer does not need either installed separately. Keep the complete `tools/exiftool` directory with the app. Photo metadata support appears as `scan-metadata-v1` in health.
+TwinCheck Scan Agent installs for the signed-in Windows user and runs as a tray app. The
+scan agent API that TwinCheckN talks to (`https://localhost:3625`) runs inside that app, so
+it's available whenever the scanner account is signed in. No administrator rights are needed
+to install or update it.
+
+The installer includes .NET and ExifTool, so nothing else needs to be installed.
 
 ## Install
 
-Extract the entire ZIP, then double-click:
+1. Download `TwinCheckScanAgent-win-Setup.exe` from the latest
+   [GitHub release](https://github.com/edrdmolina/TwinCheckAgent/releases/latest).
+2. Double-click it. If Windows SmartScreen says "Windows protected your PC", click
+   **More info**, then **Run anyway**. Builds aren't code-signed yet.
+3. The app opens when the install finishes. Windows asks whether to install a certificate
+   for "localhost". Click **Yes**. This lets Chrome and Edge connect to the agent without
+   warnings, and Windows only asks once.
+4. Open **Setup**, copy the API key into TwinCheckN, then create your scanner profiles and
+   click **Save Config**.
 
-```text
-Install-TwinCheck.cmd
-```
+Setup adds shortcuts to the desktop and Start menu and an entry under **Settings > Apps**.
 
-Approve the Windows administrator prompt. The installer:
+### Upgrading from the old service version
 
-- copies the app to `C:\Program Files\TwinCheck\ScanAgent`
-- installs and starts the `TwinCheck Scan Agent` Windows service
-- creates and trusts a machine-local `localhost` HTTPS certificate
-- creates a shared config with a unique API key when one does not already exist
-- creates desktop and Start menu shortcuts
-- adds TwinCheck Scan Agent to **Settings > Apps** for uninstall
-- stores shared profiles, logs, and durable operation records under `C:\ProgramData\TwinCheck\ScanAgent`
+Older builds installed a Windows service with an admin-only PowerShell script. On the first
+start after installing this version, a yellow banner says the old version must be removed:
 
-For an advanced install, open PowerShell as Administrator and run:
+1. Let any scans that are running finish.
+2. Click **Remove old version** and choose **Yes** in the Windows permission prompt.
+   This is the only step that needs an administrator.
 
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\install.ps1
-```
+The app removes the old service, certificates, and Program Files folder. It copies your
+profiles, API key, and job history from `C:\ProgramData\TwinCheck\ScanAgent` into your
+user folder, so TwinCheckN keeps working without changes. The original files in
+ProgramData are left in place; delete them once you've confirmed everything works.
 
-## NAS or UNC destinations
+## Everyday use
 
-`LocalSystem`, the default service account, usually cannot access paths such as `\\server\share\folder`. Install with a Windows account that can write to the share:
+- The app starts automatically, minimized to the tray, when you sign in to Windows.
+- Closing the window keeps the agent running in the tray. Open it again from the tray icon
+  or the Start menu.
+- To stop the agent, right-click the tray icon and choose **Quit**. If scans are running,
+  the app asks first. Interrupted scans resume the next time the app starts.
 
-```powershell
-$cred = Get-Credential
-.\install.ps1 -ServiceCredential $cred
-```
+## Updates
 
-Use the full account name, such as `DESKTOP-V0ENIS3\admin`, and the account password. Windows services cannot sign in with a Windows Hello PIN. The installer grants this account access to the TwinCheck data folder and the local **Log on as a service** right.
+The app checks for a new release every 6 hours and downloads it in the background. When an
+update is ready, a blue banner appears with **Restart to update**:
 
-You can validate the credential first:
+- The button is disabled while scan jobs are running and enables once they finish.
+- Restarting takes a few seconds. TwinCheckN can't reach the agent during that time.
+- If nobody clicks the button, the update installs the next time the app starts, for
+  example after a reboot or the next sign-in.
 
-```powershell
-$cred = Get-Credential
-Start-Process powershell -Credential $cred -ArgumentList "-NoExit", "-Command", "whoami"
-```
+## NAS and network destinations
 
-## Reinstall a test build
-
-Extract the replacement ZIP and double-click `Reinstall-TwinCheck.cmd`, or run:
-
-```powershell
-.\reinstall.ps1
-```
-
-For a NAS/UNC service account:
-
-```powershell
-$cred = Get-Credential
-.\reinstall.ps1 -ServiceCredential $cred
-```
-
-If PowerShell reports that running scripts is disabled, allow scripts only for
-the current PowerShell session, unblock the downloaded script, and retry in the
-same window so `$cred` remains available:
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-Unblock-File .\reinstall.ps1
-.\reinstall.ps1 -ServiceCredential $cred
-```
-
-The `Process` policy expires when that PowerShell window closes. Only bypass
-the policy when the package came from a trusted source. If the command is still
-blocked, run `Get-ExecutionPolicy -List`; a defined `MachinePolicy` or
-`UserPolicy` is controlled by Group Policy and requires an administrator.
-
-Reinstall preserves the shared API key, profiles, logs, and operation records.
+The agent runs as the signed-in user, so it can reach any share that user can open in
+File Explorer, including mapped drive letters. No separate service account is needed.
 
 ## Uninstall
 
-Use any of these methods:
+Use **Settings > Apps > TwinCheck Scan Agent > Uninstall**. This removes the app and its
+sign-in startup entry. Profiles, the API key, job history, and logs are kept in
+`%AppData%\TwinCheck\ScanAgent`; delete that folder for a completely clean removal.
 
-- **Settings > Apps > TwinCheck Scan Agent > Uninstall**
-- **Start > TwinCheck Scan Agent > Uninstall TwinCheck Scan Agent**
-- double-click `Uninstall-TwinCheck.cmd` in the extracted package
-- run `.\uninstall.ps1` from an elevated PowerShell window
+## Files
 
-The default uninstall preserves profiles and logs for the next test install. To remove those too:
-
-```powershell
-.\uninstall.ps1 -PurgeData
-```
-
-## Verify
-
-```powershell
-Get-Service "TwinCheck Scan Agent"
-curl.exe -k https://localhost:3625/
-curl.exe -k -H "X-Api-Key: YOUR_API_KEY" https://localhost:3625/api/scan/health
-```
-
-Open the GUI from the desktop or Start menu shortcut.
+| What | Where |
+|------|-------|
+| App | `%LocalAppData%\TwinCheckScanAgent` |
+| Config and API key | `%AppData%\TwinCheck\ScanAgent\agent-config.json` |
+| Job history | `%AppData%\TwinCheck\ScanAgent\jobs.sqlite3` |
+| Logs | `%AppData%\TwinCheck\ScanAgent\logs` |
+| HTTPS certificate | Current user's certificate store, "TwinCheck Scan Agent Localhost" |
 
 ## Troubleshooting
 
-Check service state, Windows events, and agent logs:
+Check the agent from PowerShell:
 
 ```powershell
-Get-Service "TwinCheck Scan Agent"
-
-Get-EventLog -LogName Application -Newest 20 |
-  Where-Object { $_.Source -like "*TwinCheck*" -or $_.Message -like "*TwinCheck*" } |
-  Format-List
-
-Get-Content "C:\ProgramData\TwinCheck\ScanAgent\logs\agent-*.log" -Tail 100
+curl.exe https://localhost:3625/
+curl.exe -H "X-Api-Key: YOUR_API_KEY" https://localhost:3625/api/scan/health
+Get-Content "$env:APPDATA\TwinCheck\ScanAgent\logs\agent-*.log" -Tail 100
 ```
 
-Check which Windows account runs the service:
-
-```powershell
-Get-WmiObject Win32_Service -Filter "Name='TwinCheck Scan Agent'" |
-  Select-Object Name, StartName, State
-```
-
-If Event Viewer reports a missing HTTPS certificate, run this from the extracted package or installed application folder as Administrator:
-
-```powershell
-.\repair-certificate.ps1
-```
+- **"Port 3625 is already in use"**: another program, often an old TwinCheck service that
+  wasn't fully removed, is using the port. Find it with
+  `Get-NetTCPConnection -LocalPort 3625 | Select-Object OwningProcess`, close it, then
+  click **Retry**.
+- **Browser certificate warning**: the certificate prompt was declined. Click
+  **Trust certificate** in the app's banner and choose **Yes**.
+- **Old version removal failed**: details are in
+  `C:\ProgramData\TwinCheck\ScanAgent\logs\legacy-removal.log`.
