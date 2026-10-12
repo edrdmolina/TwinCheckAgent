@@ -59,7 +59,7 @@ public sealed class DiagnosticsService(
 
         return new AgentDiagnostics(
             AgentName: config.AgentName,
-            Version: config.Version,
+            Version: AgentVersion.Current,
             Hostname: Environment.MachineName,
             AgentUrl: agentUrl,
             Capabilities: ["async-operations-v1"],

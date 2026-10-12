@@ -409,7 +409,7 @@ public class MainWindowViewModel : ViewModelBase
         var config = new AgentConfig
         {
             AgentName = string.IsNullOrWhiteSpace(AgentName) ? "TwinCheck Scan Agent" : AgentName.Trim(),
-            Version = "0.1.0",
+            Version = AgentVersion.Current,
             ApiKey = string.IsNullOrWhiteSpace(ApiKey) ? "dev-local-key" : ApiKey.Trim(),
             AllowedSourceRoots = Profiles.Select(profile => Path.GetFullPath(profile.SourceDir)).Distinct().ToArray(),
             AllowedDestinationRoots = Profiles.Select(profile => Path.GetFullPath(profile.DestinationDir)).Distinct().ToArray(),
@@ -740,7 +740,7 @@ public class MainWindowViewModel : ViewModelBase
         new()
         {
             AgentName = "TwinCheck Scan Agent",
-            Version = "0.1.0",
+            Version = AgentVersion.Current,
             ApiKey = "dev-local-key",
             AllowedSourceRoots = ["/tmp/twincheck-agent/source/inbox"],
             AllowedDestinationRoots = ["/tmp/twincheck-agent/destination"],

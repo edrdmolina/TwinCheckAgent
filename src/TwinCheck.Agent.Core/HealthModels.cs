@@ -87,7 +87,7 @@ public sealed class HealthService(
         return new AgentHealth(
             Ok: profileHealth.Length > 0 && profileHealth.Any(profile => profile.SourceExists && profile.DestinationWritable),
             AgentName: config.AgentName,
-            Version: config.Version,
+            Version: AgentVersion.Current,
             Hostname: Environment.MachineName,
             AgentUrl: agentUrl,
             Capabilities: metadataWriter?.IsAvailable == true

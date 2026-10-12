@@ -3,7 +3,7 @@ namespace TwinCheck.Agent.Core;
 public sealed record AgentConfig
 {
     public string AgentName { get; init; } = Environment.MachineName;
-    public string Version { get; init; } = "0.1.0";
+    public string Version { get; init; } = AgentVersion.Current;
     public string ApiKey { get; init; } = "change-me";
     public string[] AllowedSourceRoots { get; init; } = [];
     public string[] AllowedDestinationRoots { get; init; } = [];

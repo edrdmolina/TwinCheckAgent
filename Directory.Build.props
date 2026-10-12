@@ -7,5 +7,7 @@
       C# source and fail with CS2015 on Linux.
     -->
     <DefaultItemExcludes>$(DefaultItemExcludes);._*;**/._*</DefaultItemExcludes>
+    <!-- Release builds override this with -p:Version=<tag>. -->
+    <Version>0.1.0</Version>
   </PropertyGroup>
 </Project>
