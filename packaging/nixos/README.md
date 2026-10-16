@@ -105,11 +105,39 @@ environment was also used, remove it with:
 systemctl --user unset-environment DOTNET_SYSTEM_IO_DISABLEFILELOCKING
 ```
 
-## Reinstall a test build
+## Update
 
-Extract the replacement archive and run:
+When a new release is published, update from the installed copy:
 
 ```bash
+~/.local/share/TwinCheck/ScanAgent/update.sh
+```
+
+The updater:
+
+- checks the latest [GitHub release](https://github.com/edrdmolina/TwinCheckAgent/releases/latest) and does nothing if you're already on it
+- refuses to run while scan jobs are queued or running
+- downloads the NixOS package and verifies its published SHA-256 checksum
+- reinstalls with the same install folder and agent URL, keeping profiles, the API key, logs, job history, and any `systemctl --user edit` override
+
+Other options:
+
+```bash
+~/.local/share/TwinCheck/ScanAgent/update.sh --check          # only report whether an update exists
+~/.local/share/TwinCheck/ScanAgent/update.sh --version 0.3.0  # install a specific release
+```
+
+Run it as the scanner user, not with `sudo`. If `curl` isn't installed, the updater uses the one from nixpkgs.
+
+Installs older than 0.1.2 don't include `update.sh`. Update those once by hand, as below; after that, `update.sh` works.
+
+## Reinstall a downloaded package
+
+Extract the archive into its own folder (it has no top-level folder) and run:
+
+```bash
+mkdir ~/twincheck-new && tar -xzf TwinCheck-Scan-Agent-*-nixos-x64.tar.gz -C ~/twincheck-new
+cd ~/twincheck-new
 ./reinstall.sh
 ```
 

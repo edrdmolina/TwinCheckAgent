@@ -163,9 +163,22 @@ curl -k -H "X-Api-Key: YOUR_API_KEY" https://localhost:3625/api/scan/health
 journalctl --user -u twincheck-scan-agent -n 100 --no-pager
 ```
 
+## Update
+
+After a release is published (see [Windows test install](WINDOWS_TEST_INSTALL.md#publish-a-release)),
+update each machine as the scanner user:
+
+```bash
+~/.local/share/TwinCheck/ScanAgent/update.sh
+```
+
+It checks GitHub, refuses to run while jobs are active, verifies the package checksum, and runs
+`reinstall.sh` with the same install folder and agent URL. Use `--check` to only report whether an
+update exists. Installs older than 0.1.2 don't have `update.sh`; reinstall those once by hand.
+
 ## Reinstall
 
-Build and extract the replacement archive, then run:
+Build and extract the replacement archive into its own folder, then run:
 
 ```bash
 ./reinstall.sh

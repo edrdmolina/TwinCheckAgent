@@ -4,6 +4,8 @@ set -euo pipefail
 configuration="${CONFIGURATION:-Release}"
 output_root="${OUTPUT_ROOT:-artifacts/nixos}"
 package_version="${PACKAGE_VERSION:-0.1.0}"
+# Framework-dependent (Nix provides .NET), but only Linux x64 native libraries are shipped.
+runtime="${RUNTIME:-linux-x64}"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 output_root_full="$repo_root/$output_root"
@@ -18,6 +20,7 @@ mkdir -p "$api_output" "$gui_output" "$package_output"
 
 "$dotnet_cmd" publish "$repo_root/src/TwinCheck.Agent.Api/TwinCheck.Agent.Api.csproj" \
     -c "$configuration" \
+    -r "$runtime" \
     --self-contained false \
     -p:UseAppHost=false \
     -p:Version="$package_version" \
@@ -25,6 +28,7 @@ mkdir -p "$api_output" "$gui_output" "$package_output"
 
 "$dotnet_cmd" publish "$repo_root/src/TwinCheck.Agent.Gui/TwinCheck.Agent.Gui.csproj" \
     -c "$configuration" \
+    -r "$runtime" \
     --self-contained false \
     -p:UseAppHost=false \
     -p:Version="$package_version" \
@@ -36,9 +40,10 @@ cp -R "$gui_output"/. "$package_output/gui"/
 cp "$repo_root/packaging/nixos/install.sh" "$package_output/install.sh"
 cp "$repo_root/packaging/nixos/uninstall.sh" "$package_output/uninstall.sh"
 cp "$repo_root/packaging/nixos/reinstall.sh" "$package_output/reinstall.sh"
+cp "$repo_root/packaging/nixos/update.sh" "$package_output/update.sh"
 cp "$repo_root/packaging/nixos/README.md" "$package_output/README.md"
 printf '%s\n' "$package_version" > "$package_output/package-version.txt"
-chmod +x "$package_output/install.sh" "$package_output/uninstall.sh" "$package_output/reinstall.sh"
+chmod +x "$package_output/install.sh" "$package_output/uninstall.sh" "$package_output/reinstall.sh" "$package_output/update.sh"
 tar -C "$package_output" -czf "$archive_path" .
 
 echo "NixOS package ready:"

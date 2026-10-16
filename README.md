@@ -121,7 +121,8 @@ and updates itself from GitHub Releases. See [packaging/windows/README.md](packa
 
 **Publishing an update:** push a version tag. The [Release workflow](.github/workflows/release.yml)
 tests, builds the Windows installer and update packages plus the NixOS tarball, and publishes
-the GitHub release. Installed Windows agents pick it up within 6 hours.
+the GitHub release. Installed Windows agents pick it up within 6 hours; on NixOS, run
+`~/.local/share/TwinCheck/ScanAgent/update.sh` on each machine.
 
 ```bash
 git tag v0.2.0 && git push origin v0.2.0
@@ -139,7 +140,7 @@ Build the NixOS package and `.tar.gz`:
 ./scripts/package-nixos.sh
 ```
 
-The NixOS target intentionally uses the .NET 9 runtime from Nix; install it on the scanner computer with `nix profile install nixpkgs#dotnet-sdk_9`. The NixOS package contains install, reinstall, and uninstall commands. Uninstall preserves profiles/logs unless the purge option is selected.
+The NixOS target intentionally uses the .NET 9 runtime from Nix; install it on the scanner computer with `nix profile install nixpkgs#dotnet-sdk_9`. The package ships Linux x64 native libraries only. It contains install, reinstall, update, and uninstall commands. Uninstall preserves profiles/logs unless the purge option is selected.
 
 See [Windows test install](docs/WINDOWS_TEST_INSTALL.md) and [NixOS test install](docs/NIXOS_TEST_INSTALL.md) for the build and test workflow.
 

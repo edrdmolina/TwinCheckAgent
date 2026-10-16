@@ -91,7 +91,12 @@ jobs:
       - name: Build NixOS package
         run: PACKAGE_VERSION="${GITHUB_REF_NAME#v}" ./scripts/package-nixos.sh
 
+      # update.sh on installed machines refuses a tarball without a matching .sha256.
+      - name: Write checksum
+        working-directory: artifacts/nixos
+        run: for archive in *.tar.gz; do sha256sum "$archive" > "$archive.sha256"; done
+
       - name: Attach to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$GITHUB_REF_NAME" artifacts/nixos/*.tar.gz --clobber
+        run: gh release upload "$GITHUB_REF_NAME" artifacts/nixos/*.tar.gz artifacts/nixos/*.tar.gz.sha256 --clobber

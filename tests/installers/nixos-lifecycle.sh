@@ -117,4 +117,85 @@ custom_install="$test_root/custom install"
 [[ ! -e "$XDG_CONFIG_HOME/TwinCheck/ScanAgent" ]]
 [[ ! -e "$XDG_STATE_HOME/TwinCheck/ScanAgent" ]]
 
+# update.sh: install 0.1.0, then update from a fake GitHub release of 0.2.0.
+release_dir="$test_root/release"
+mkdir -p "$release_dir"
+cp "$repo_root/packaging/nixos/update.sh" "$package_dir/update.sh"
+chmod +x "$package_dir/update.sh"
+printf '0.1.0\n' > "$package_dir/package-version.txt"
+
+release_package="$test_root/release-package"
+cp -R "$package_dir" "$release_package"
+printf '0.2.0\n' > "$release_package/package-version.txt"
+archive_name="TwinCheck-Scan-Agent-0.2.0-nixos-x64.tar.gz"
+tar -C "$release_package" -czf "$release_dir/$archive_name" .
+(cd "$release_dir" && sha256sum "$archive_name" > "$archive_name.sha256")
+cat > "$release_dir/release.json" <<EOF
+{
+  "tag_name": "v0.2.0",
+  "assets": [
+    { "name": "$archive_name", "browser_download_url": "https://example.test/download/$archive_name" },
+    { "name": "$archive_name.sha256", "browser_download_url": "https://example.test/download/$archive_name.sha256" }
+  ]
+}
+EOF
+
+# Serves the fake release; localhost answers with $FAKE_AGENT_OPERATIONS, or is unreachable.
+cat > "$fake_bin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+output="" url=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o) output="$2"; shift 2 ;;
+        -H|--max-time|--retry) shift 2 ;;
+        http*) url="$1"; shift ;;
+        *) shift ;;
+    esac
+done
+case "$url" in
+    https://api.github.com/*) body="$FAKE_RELEASE_DIR/release.json" ;;
+    https://example.test/download/*) body="$FAKE_RELEASE_DIR/${url##*/}" ;;
+    *localhost*)
+        [[ -n "${FAKE_AGENT_OPERATIONS:-}" ]] || exit 7
+        printf '%s' "$FAKE_AGENT_OPERATIONS"
+        exit 0
+        ;;
+    *) exit 22 ;;
+esac
+if [[ -n "$output" ]]; then cp "$body" "$output"; else cat "$body"; fi
+EOF
+chmod +x "$fake_bin/curl"
+export FAKE_RELEASE_DIR="$release_dir"
+
+"$package_dir/install.sh" --no-start
+installed_version() { tr -d '\n' < "$default_install/package-version.txt"; }
+api_key_before="$(grep -o '"apiKey": "[^"]*"' "$config_file")"
+[[ "$(installed_version)" == "0.1.0" ]]
+
+"$default_install/update.sh" --check | grep -Fq "An update is available"
+[[ "$(installed_version)" == "0.1.0" ]]
+
+if FAKE_AGENT_OPERATIONS='{ "operations": [ { "status": "processing" } ] }' "$default_install/update.sh" 2>/dev/null; then
+    echo "update.sh ran while a scan job was processing." >&2
+    exit 1
+fi
+[[ "$(installed_version)" == "0.1.0" ]]
+
+good_checksum="$(cat "$release_dir/$archive_name.sha256")"
+printf '%064d  %s\n' 0 "$archive_name" > "$release_dir/$archive_name.sha256"
+if "$default_install/update.sh" 2>/dev/null; then
+    echo "update.sh installed a package with a wrong checksum." >&2
+    exit 1
+fi
+[[ "$(installed_version)" == "0.1.0" ]]
+printf '%s\n' "$good_checksum" > "$release_dir/$archive_name.sha256"
+
+FAKE_AGENT_OPERATIONS='{ "operations": [ { "status": "completed" } ] }' "$default_install/update.sh"
+[[ "$(installed_version)" == "0.2.0" ]]
+[[ "$(grep -o '"apiKey": "[^"]*"' "$config_file")" == "$api_key_before" ]]
+grep -Fq -- '--urls https://localhost:3625' "$default_install/twincheck-scan-agent-api"
+"$default_install/update.sh" | grep -Fq "up to date"
+"$default_install/uninstall.sh" --purge-data
+
 echo "NixOS installer lifecycle test passed."
