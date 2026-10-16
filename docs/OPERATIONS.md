@@ -63,9 +63,11 @@ In TwinCheckN:
 1. Scanner exports one roll folder into the configured target folder.
 2. In TwinCheckN, open the roll.
 3. Click Mark as Scanned.
-4. For polling profiles, the agent detects the next child folder with images and waits for stability.
-5. For sentinel profiles, the agent waits for `export.done`, then waits for stability.
+4. For polling profiles, the agent takes the newest child folder with images and waits for stability.
+5. For sentinel profiles, the agent takes the newest folder with `export.done`, including one that was already ready before you clicked, then waits for stability.
 6. TwinCheckN automatically processes the ready source, records the scan job, then advances status.
+
+The agent only picks a folder on its own when it's the only roll in the watch folder. If two or more folders contain images or `export.done` (for example, a finished roll plus the next roll still scanning), the job stops and TwinCheckN shows **Choose the source folder**. Folders still waiting for `export.done` can't be selected. Pick the roll, then click **Mark as Scanned** again. Empty folders are ignored. The agent checks again after the folder settles, so a second roll that appears during that time also triggers the choice. Noritsu daily folders follow the same rule.
 
 Processing is queued by the local agent. TwinCheckN polls the persisted operation state and can resume the status check after a browser timeout, popup closure, or agent restart.
 

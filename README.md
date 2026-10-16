@@ -98,7 +98,7 @@ Use the GUI to select the scanner source folder and destination folder, then sav
 
 Profiles support Frontier polling, Frontier sentinel, and Noritsu daily-folder watching. Legacy `frontier-folder` and `noritsu-daily-watch` profile values are accepted as aliases. The source folder can be either the exact roll folder containing images or a source root with roll subfolders. If multiple roll subfolders are present during a direct process request, the agent refuses to guess and asks for the exact folder.
 
-Durable scan requests can set `waitForReady: true`. TwinCheckAgent then owns the watch and settle phases, resolves the newest scanner candidate, and processes only after the selected profile's readiness condition succeeds. Sentinel profiles always fail closed when `export.done` is absent, including legacy direct-process requests.
+Durable scan requests can set `waitForReady: true`. TwinCheckAgent then owns the watch and settle phases, takes the newest ready roll folder (for sentinel profiles, the newest folder with `export.done`, even if it was ready before the request), and processes only after the selected profile's readiness condition succeeds. If more than one roll folder with images or `export.done` is in the watch folder, the agent won't guess: the operation fails with `errorCode: "multiple-source-candidates"` and TwinCheckN asks the operator to choose a folder. Sentinel profiles always fail closed when `export.done` is absent, including legacy direct-process requests.
 
 Each profile can optionally convert BMP scans to uncompressed `.tif` output. Conversion is off by default, verifies exact pixel equality before publishing, and preserves the original BMP unchanged in the `_processed` archive.
 

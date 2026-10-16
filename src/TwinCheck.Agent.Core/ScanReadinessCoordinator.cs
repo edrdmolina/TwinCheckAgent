@@ -5,13 +5,19 @@ public sealed record ScanReadinessProgress(
     SourceCandidate? Candidate,
     string Message);
 
-public sealed class ScanReadinessException(string code, string message) : InvalidOperationException(message)
+public sealed class ScanReadinessException(string code, string message, string? sourceDir = null) : InvalidOperationException(message)
 {
     public string Code { get; } = code;
+
+    /// <summary>The folder the error is about, when it isn't the job's candidate (for example the watch folder).</summary>
+    public string? SourceDir { get; } = sourceDir;
 }
 
 public sealed class ScanReadinessCoordinator(AgentConfigProvider configProvider)
 {
+    /// <summary>TwinCheckN shows a folder picker for this code and resends the job with the chosen folder.</summary>
+    public const string MultipleSourceCandidatesCode = "multiple-source-candidates";
+
     public async Task<SourceCandidate> WaitForReadyAsync(
         ProcessScanRequest request,
         Action<ScanReadinessProgress>? onProgress = null,
@@ -43,16 +49,16 @@ public sealed class ScanReadinessCoordinator(AgentConfigProvider configProvider)
         }
 
         var deadline = DateTimeOffset.UtcNow.AddSeconds(Math.Max(1, profile.WatchTimeoutSeconds));
-        var initialCandidate = FindNewestCandidate(profile, scannerMode, watchRoot, explicitSource is not null, request);
-        var initialSentinelDirectories = EnumerateCandidateDirectories(watchRoot, explicitSource is not null)
-            .Where(path => File.Exists(Path.Combine(path, FileSystemSafety.ExportSentinelFileName)))
-            .ToHashSet(PathComparer);
+        var watching = explicitSource is null;
+        var initialCandidate = FindCandidates(profile, scannerMode, watchRoot, !watching, request).FirstOrDefault();
 
         onProgress?.Invoke(new ScanReadinessProgress(
             ScanOperationPhases.Watching,
             initialCandidate,
             BuildWaitingMessage(scannerMode, initialCandidate)));
 
+        // Take the newest ready folder. Without an explicit source, a second folder in the watch
+        // folder means the agent can't tell which roll belongs to this job, so the operator picks.
         SourceCandidate candidate;
         while (true)
         {
@@ -62,22 +68,20 @@ public sealed class ScanReadinessCoordinator(AgentConfigProvider configProvider)
                 throw new ScanReadinessException("watch-timeout", BuildWatchTimeoutMessage(scannerMode));
             }
 
-            var newest = FindNewestCandidate(profile, scannerMode, watchRoot, explicitSource is not null, request);
-            if (newest is not null && IsReadyToSettle(
-                    scannerMode,
-                    newest,
-                    initialCandidate,
-                    initialSentinelDirectories,
-                    explicitSource is not null))
+            var candidates = FindCandidates(profile, scannerMode, watchRoot, !watching, request);
+            var newestReady = candidates.FirstOrDefault(found => IsReadyToTake(scannerMode, found));
+            if (newestReady is not null)
             {
-                candidate = newest;
+                if (watching) EnsureSingleCandidate(candidates, watchRoot);
+                candidate = newestReady;
                 break;
             }
 
+            var newest = candidates.FirstOrDefault() ?? initialCandidate;
             onProgress?.Invoke(new ScanReadinessProgress(
                 ScanOperationPhases.Watching,
-                newest ?? initialCandidate,
-                BuildWaitingMessage(scannerMode, newest ?? initialCandidate)));
+                newest,
+                BuildWaitingMessage(scannerMode, newest)));
             await Task.Delay(TimeSpan.FromSeconds(Math.Max(1, profile.SettlePollSeconds)), cancellationToken);
         }
 
@@ -105,14 +109,17 @@ public sealed class ScanReadinessCoordinator(AgentConfigProvider configProvider)
                 stable = false;
             }
 
+            // The scanner may rename the roll folder (for example WAIT to Ready) while it settles.
+            // Follow it when it is still the only folder; otherwise ask the operator.
+            var current = watching ? FindCandidates(profile, scannerMode, watchRoot, false, request) : [];
+            if (watching) EnsureSingleCandidate(current, watchRoot);
+            var renamed = current.FirstOrDefault(found => !PathsEqual(found.Path, candidate.Path) && IsReadyToTake(scannerMode, found));
+
             if (!stable)
             {
-                var replacement = explicitSource is null
-                    ? FindNewestCandidate(profile, scannerMode, watchRoot, false, request)
-                    : null;
-                if (replacement is not null && !PathsEqual(replacement.Path, candidate.Path))
+                if (renamed is not null)
                 {
-                    candidate = replacement;
+                    candidate = renamed;
                     continue;
                 }
 
@@ -121,14 +128,9 @@ public sealed class ScanReadinessCoordinator(AgentConfigProvider configProvider)
                     $"Files did not stabilize within {profile.SettleTimeoutSeconds} seconds. Nothing was processed.");
             }
 
-            var newestAfterSettle = explicitSource is null
-                ? FindNewestCandidate(profile, scannerMode, watchRoot, false, request)
-                : candidate;
-            if (newestAfterSettle is not null
-                && !PathsEqual(newestAfterSettle.Path, candidate.Path)
-                && IsReadyToSettle(scannerMode, newestAfterSettle, initialCandidate, initialSentinelDirectories, false))
+            if (renamed is not null)
             {
-                candidate = newestAfterSettle;
+                candidate = renamed;
                 continue;
             }
 
@@ -153,32 +155,26 @@ public sealed class ScanReadinessCoordinator(AgentConfigProvider configProvider)
         }
     }
 
-    private static bool IsReadyToSettle(
-        string scannerMode,
-        SourceCandidate candidate,
-        SourceCandidate? initialCandidate,
-        IReadOnlySet<string> initialSentinelDirectories,
-        bool explicitSource)
+    private static bool IsReadyToTake(string scannerMode, SourceCandidate candidate) =>
+        scannerMode == ScannerModes.FrontierSentinelWatch
+            ? candidate.HasSentinel
+            : candidate.ImageCount > 0;
+
+    private static void EnsureSingleCandidate(IReadOnlyList<SourceCandidate> candidates, string watchRoot)
     {
-        if (scannerMode != ScannerModes.FrontierSentinelWatch)
-        {
-            return candidate.ImageCount > 0;
-        }
+        if (candidates.Count <= 1) return;
 
-        if (!candidate.HasSentinel)
-        {
-            return false;
-        }
-
-        if (explicitSource || initialCandidate?.HasSentinel == true)
-        {
-            return true;
-        }
-
-        return !initialSentinelDirectories.Contains(candidate.Path);
+        const int listed = 5;
+        var names = string.Join(", ", candidates.Take(listed).Select(found => found.Name));
+        var more = candidates.Count > listed ? $", and {candidates.Count - listed} more" : "";
+        throw new ScanReadinessException(
+            MultipleSourceCandidatesCode,
+            $"{candidates.Count} folders are in the watch folder ({names}{more}). Choose which one to process.",
+            Path.GetFullPath(watchRoot));
     }
 
-    private static SourceCandidate? FindNewestCandidate(
+    /// <summary>Newest first: folders with images or the export sentinel. Empty folders are ignored.</summary>
+    private static IReadOnlyList<SourceCandidate> FindCandidates(
         ScannerProfile profile,
         string scannerMode,
         string watchRoot,
@@ -190,7 +186,7 @@ public sealed class ScanReadinessCoordinator(AgentConfigProvider configProvider)
             .Where(candidate => candidate.ImageCount > 0 || candidate.HasSentinel)
             .OrderByDescending(candidate => candidate.ModifiedAt)
             .ThenByDescending(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault();
+            .ToArray();
 
     private static IEnumerable<string> EnumerateCandidateDirectories(string watchRoot, bool explicitSource)
     {

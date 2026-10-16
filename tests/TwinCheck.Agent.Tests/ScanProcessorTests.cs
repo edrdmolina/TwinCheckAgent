@@ -610,7 +610,7 @@ public sealed class ScanProcessorTests
     }
 
     [Fact]
-    public async Task DurableSentinelOperationWaitsForNewestExistingExportAndProcessesEveryImage()
+    public async Task DurableSentinelOperationAsksOperatorWhenOlderReadyRollAndNewerScanAreBothPresent()
     {
         using var workspace = new TempWorkspace();
         var sourceRoot = workspace.CreateSource("Frontier");
@@ -618,46 +618,142 @@ public sealed class ScanProcessorTests
         var olderReady = Path.Combine(sourceRoot, "100-old-Ready");
         workspace.WriteFile(olderReady, "old.tif", "old-image");
         workspace.WriteFile(olderReady, FileSystemSafety.ExportSentinelFileName, "{}");
-        File.SetLastWriteTimeUtc(olderReady, DateTime.UtcNow.AddMinutes(-10));
-
+        File.SetLastWriteTimeUtc(Path.Combine(olderReady, "old.tif"), DateTime.UtcNow.AddMinutes(-10));
         var waitFolder = Path.Combine(sourceRoot, "200-WAIT");
         workspace.WriteFile(waitFolder, "frame001.tif", "image-one");
-        var config = workspace.CreateConfig(sourceRoot, destinationRoot) with
-        {
-            Profiles =
-            [
-                workspace.CreateProfile(sourceRoot, destinationRoot) with
-                {
-                    ScannerMode = ScannerModes.FrontierSentinelWatch,
-                    SettleStableSeconds = 0,
-                    SettleTimeoutSeconds = 5,
-                    WatchTimeoutSeconds = 10,
-                    SettlePollSeconds = 1
-                }
-            ]
-        };
-        var configProvider = new AgentConfigProvider(config);
-        var logger = new LocalAgentLogger(Path.Combine(workspace.Root, "logs"));
-        using var operations = new ScanOperationService(
-            new ScanOperationStore(Path.Combine(workspace.Root, "state"), logger),
-            new ScanProcessor(configProvider, new OperationStore()),
-            new ScanWatchService(configProvider),
-            logger);
+        using var operations = StartOperations(workspace, WatchConfig(workspace, sourceRoot, destinationRoot, ScannerModes.FrontierSentinelWatch));
 
         operations.Enqueue(workspace.CreateRequest() with { WaitForReady = true });
-        await Task.Delay(500);
-        Assert.False(ScanOperationStatuses.IsTerminal(operations.Get("op-1").Status));
-        workspace.WriteFile(waitFolder, "frame002.tif", "image-two");
-        var readyFolder = Path.Combine(sourceRoot, "200-Ready");
-        Directory.Move(waitFolder, readyFolder);
-        workspace.WriteFile(readyFolder, FileSystemSafety.ExportSentinelFileName, "{}");
+        var failed = await WaitForTerminal(operations, "op-1");
 
+        Assert.Equal(ScanOperationStatuses.Failed, failed.Status);
+        Assert.Equal(ScanReadinessCoordinator.MultipleSourceCandidatesCode, failed.ErrorCode);
+        Assert.Equal(sourceRoot, failed.ErrorSourceDir);
+        Assert.Contains("2 folders are in the watch folder", failed.Error);
+        Assert.True(File.Exists(Path.Combine(olderReady, "old.tif")));
+        Assert.True(File.Exists(Path.Combine(waitFolder, "frame001.tif")));
+        Assert.False(Directory.Exists(workspace.FinalDir(destinationRoot)));
+    }
+
+    [Fact]
+    public async Task DurableSentinelOperationProcessesRollThatWasReadyBeforeTheJobStarted()
+    {
+        using var workspace = new TempWorkspace();
+        var sourceRoot = workspace.CreateSource("Frontier");
+        var destinationRoot = workspace.CreateDestination();
+        var readyFolder = Path.Combine(sourceRoot, "200-Ready");
+        workspace.WriteFile(readyFolder, "frame001.tif", "image-one");
+        workspace.WriteFile(readyFolder, "frame002.tif", "image-two");
+        workspace.WriteFile(readyFolder, FileSystemSafety.ExportSentinelFileName, "{}");
+        using var operations = StartOperations(workspace, WatchConfig(workspace, sourceRoot, destinationRoot, ScannerModes.FrontierSentinelWatch));
+
+        operations.Enqueue(workspace.CreateRequest() with { WaitForReady = true });
         var completed = await WaitForTerminal(operations, "op-1");
 
         Assert.Equal(ScanOperationStatuses.Completed, completed.Status);
         Assert.Equal(2, completed.Result?.ImageCount);
         Assert.Equal(readyFolder, completed.ResolvedSourceDir);
-        Assert.True(Directory.Exists(olderReady));
+    }
+
+    [Fact]
+    public async Task DurableSentinelOperationIgnoresEmptyFoldersWhenCountingRolls()
+    {
+        using var workspace = new TempWorkspace();
+        var sourceRoot = workspace.CreateSource("Frontier");
+        var destinationRoot = workspace.CreateDestination();
+        Directory.CreateDirectory(Path.Combine(sourceRoot, "empty"));
+        var readyFolder = Path.Combine(sourceRoot, "200-Ready");
+        workspace.WriteFile(readyFolder, "frame001.tif", "image-one");
+        workspace.WriteFile(readyFolder, FileSystemSafety.ExportSentinelFileName, "{}");
+        using var operations = StartOperations(workspace, WatchConfig(workspace, sourceRoot, destinationRoot, ScannerModes.FrontierSentinelWatch));
+
+        operations.Enqueue(workspace.CreateRequest() with { WaitForReady = true });
+        var completed = await WaitForTerminal(operations, "op-1");
+
+        Assert.Equal(ScanOperationStatuses.Completed, completed.Status);
+        Assert.Equal(readyFolder, completed.ResolvedSourceDir);
+    }
+
+    [Fact]
+    public async Task DurableSentinelOperationAsksOperatorWhenSecondRollAppearsWhileSettling()
+    {
+        using var workspace = new TempWorkspace();
+        var sourceRoot = workspace.CreateSource("Frontier");
+        var destinationRoot = workspace.CreateDestination();
+        var readyFolder = Path.Combine(sourceRoot, "200-Ready");
+        workspace.WriteFile(readyFolder, "frame001.tif", "image-one");
+        workspace.WriteFile(readyFolder, FileSystemSafety.ExportSentinelFileName, "{}");
+        var config = WatchConfig(workspace, sourceRoot, destinationRoot, ScannerModes.FrontierSentinelWatch, settleStableSeconds: 3);
+        using var operations = StartOperations(workspace, config);
+
+        operations.Enqueue(workspace.CreateRequest() with { WaitForReady = true });
+        await WaitForPhase(operations, "op-1", ScanOperationPhases.Settling);
+        workspace.WriteFile(Path.Combine(sourceRoot, "300-WAIT"), "frame001.tif", "next-roll");
+        var failed = await WaitForTerminal(operations, "op-1");
+
+        Assert.Equal(ScanOperationStatuses.Failed, failed.Status);
+        Assert.Equal(ScanReadinessCoordinator.MultipleSourceCandidatesCode, failed.ErrorCode);
+        Assert.True(File.Exists(Path.Combine(readyFolder, "frame001.tif")));
+    }
+
+    [Fact]
+    public async Task DurableOperationWithChosenSourceProcessesItDespiteOtherFolders()
+    {
+        using var workspace = new TempWorkspace();
+        var sourceRoot = workspace.CreateSource("Frontier");
+        var destinationRoot = workspace.CreateDestination();
+        var chosen = Path.Combine(sourceRoot, "100-Ready");
+        workspace.WriteFile(chosen, "frame001.tif", "chosen");
+        workspace.WriteFile(chosen, FileSystemSafety.ExportSentinelFileName, "{}");
+        var other = Path.Combine(sourceRoot, "200-Ready");
+        workspace.WriteFile(other, "frame001.tif", "other");
+        workspace.WriteFile(other, FileSystemSafety.ExportSentinelFileName, "{}");
+        using var operations = StartOperations(workspace, WatchConfig(workspace, sourceRoot, destinationRoot, ScannerModes.FrontierSentinelWatch));
+
+        operations.Enqueue(workspace.CreateRequest(sourceOverride: chosen) with { WaitForReady = true });
+        var completed = await WaitForTerminal(operations, "op-1");
+
+        Assert.Equal(ScanOperationStatuses.Completed, completed.Status);
+        Assert.Equal(chosen, completed.ResolvedSourceDir);
+        Assert.True(File.Exists(Path.Combine(other, "frame001.tif")));
+    }
+
+    [Fact]
+    public async Task DurablePollingOperationAsksOperatorWhenTwoRollsHaveImages()
+    {
+        using var workspace = new TempWorkspace();
+        var sourceRoot = workspace.CreateSource("Frontier");
+        var destinationRoot = workspace.CreateDestination();
+        workspace.WriteFile(Path.Combine(sourceRoot, "roll-a"), "frame001.tif", "a");
+        workspace.WriteFile(Path.Combine(sourceRoot, "roll-b"), "frame001.tif", "b");
+        using var operations = StartOperations(workspace, WatchConfig(workspace, sourceRoot, destinationRoot, ScannerModes.FrontierPollingWatch));
+
+        operations.Enqueue(workspace.CreateRequest() with { WaitForReady = true });
+        var failed = await WaitForTerminal(operations, "op-1");
+
+        Assert.Equal(ScanOperationStatuses.Failed, failed.Status);
+        Assert.Equal(ScanReadinessCoordinator.MultipleSourceCandidatesCode, failed.ErrorCode);
+    }
+
+    [Fact]
+    public async Task DurablePollingOperationFollowsRollFolderRenamedWhileSettling()
+    {
+        using var workspace = new TempWorkspace();
+        var sourceRoot = workspace.CreateSource("Frontier");
+        var destinationRoot = workspace.CreateDestination();
+        var waitFolder = Path.Combine(sourceRoot, "200-WAIT");
+        workspace.WriteFile(waitFolder, "frame001.tif", "image-one");
+        var config = WatchConfig(workspace, sourceRoot, destinationRoot, ScannerModes.FrontierPollingWatch, settleStableSeconds: 3);
+        using var operations = StartOperations(workspace, config);
+
+        operations.Enqueue(workspace.CreateRequest() with { WaitForReady = true });
+        await WaitForPhase(operations, "op-1", ScanOperationPhases.Settling);
+        var readyFolder = Path.Combine(sourceRoot, "200-Ready");
+        Directory.Move(waitFolder, readyFolder);
+        var completed = await WaitForTerminal(operations, "op-1", timeoutSeconds: 20);
+
+        Assert.Equal(ScanOperationStatuses.Completed, completed.Status);
+        Assert.Equal(readyFolder, completed.ResolvedSourceDir);
     }
 
     [Fact]
@@ -985,6 +1081,48 @@ public sealed class ScanProcessorTests
 
         Assert.Equal("error", state.Status);
         Assert.Contains("Nothing was processed", state.Message);
+    }
+
+    private static AgentConfig WatchConfig(
+        TempWorkspace workspace,
+        string sourceRoot,
+        string destinationRoot,
+        string scannerMode,
+        int settleStableSeconds = 0) =>
+        workspace.CreateConfig(sourceRoot, destinationRoot) with
+        {
+            Profiles =
+            [
+                workspace.CreateProfile(sourceRoot, destinationRoot) with
+                {
+                    ScannerMode = scannerMode,
+                    SettleStableSeconds = settleStableSeconds,
+                    SettleTimeoutSeconds = 10,
+                    WatchTimeoutSeconds = 10,
+                    SettlePollSeconds = 1
+                }
+            ]
+        };
+
+    private static ScanOperationService StartOperations(TempWorkspace workspace, AgentConfig config)
+    {
+        var configProvider = new AgentConfigProvider(config);
+        var logger = new LocalAgentLogger(Path.Combine(workspace.Root, "logs"));
+        return new ScanOperationService(
+            new ScanOperationStore(Path.Combine(workspace.Root, "state"), logger),
+            new ScanProcessor(configProvider, new OperationStore()),
+            new ScanWatchService(configProvider),
+            logger);
+    }
+
+    private static async Task WaitForPhase(ScanOperationService service, string idempotencyKey, string phase)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (service.Get(idempotencyKey).Phase != phase)
+        {
+            Assert.True(DateTimeOffset.UtcNow < deadline, $"Operation never reached phase '{phase}'.");
+            await Task.Delay(50);
+        }
     }
 
     private static async Task<ScanWatchState> WaitForReady(ScanWatchService service, string watchId)

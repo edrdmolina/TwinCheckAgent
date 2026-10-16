@@ -411,7 +411,7 @@ public sealed class ScanOperationService : IDisposable
         catch (ScanReadinessException exception)
         {
             var current = store.Get(idempotencyKey);
-            FailOperation(current, exception.Message, exception.Code, current.Candidate?.Path);
+            FailOperation(current, exception.Message, exception.Code, exception.SourceDir ?? current.Candidate?.Path);
         }
         catch (ScanMetadataWriteException exception)
         {
