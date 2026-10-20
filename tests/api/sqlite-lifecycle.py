@@ -44,7 +44,8 @@ def main():
         now = datetime.now(timezone.utc)
         for key, age in (("recent", 1), ("retained", 31), ("expired", 181)):
             request = scan_request(key)
-            fingerprint = hashlib.sha256(json.dumps(request, indent=2).encode()).hexdigest()
+            # The agent indents with the platform's line ending (CRLF on Windows), as old agents did.
+            fingerprint = hashlib.sha256(json.dumps(request, indent=2).replace("\n", os.linesep).encode()).hexdigest()
             state = dict(operationId=key, idempotencyKey=key, requestFingerprint=fingerprint,
                          request=request, status="cancelled", phase="cancelled",
                          createdAt=timestamp(now - timedelta(days=age + 1)),
