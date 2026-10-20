@@ -103,7 +103,8 @@ def run(api, root, exiftool):
         delivered = Path(file["destinationPath"])
         # The roll was processed in local staging, uploaded, verified, and then its originals were deleted.
         processed = Path(result["manifest"]["sourceArchiveDir"])
-        assert processed.name == "_processed-B123-1" and processed.parent == source.parent, processed
+        # samefile: Windows may report the temp folder by its 8.3 short name in one path and its long name in the other.
+        assert processed.name == "_processed-B123-1" and processed.parent.samefile(source.parent), processed
         assert not source.exists() and not processed.exists()
         assert not any((root / "state" / "staging").iterdir())
         assert hashlib.sha256(delivered.read_bytes()).hexdigest() == file["sha256"]
