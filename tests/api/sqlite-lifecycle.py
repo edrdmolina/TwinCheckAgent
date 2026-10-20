@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke-test a built API with isolated SQLite state (Python standard library only)."""
 import argparse
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -130,7 +131,9 @@ def main():
             start()
             code, body = call("GET", "/api/scan/operations/waiting")
             assert code == 200 and body["operation"]["status"] == "cancelled", body
-            with sqlite3.connect(root / "state/jobs.sqlite3") as database:
+            # closing(): a sqlite3 connection's own context manager commits but never closes, and Windows
+            # can't delete the temporary folder while the database file is open.
+            with closing(sqlite3.connect(root / "state/jobs.sqlite3")) as database:
                 assert database.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
                 assert database.execute("PRAGMA auto_vacuum").fetchone()[0] == 2
                 assert database.execute("PRAGMA user_version").fetchone()[0] == 2
