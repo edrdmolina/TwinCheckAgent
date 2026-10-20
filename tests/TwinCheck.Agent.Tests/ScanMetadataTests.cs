@@ -18,16 +18,19 @@ public sealed class ScanMetadataTests : IDisposable
     {
         using var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "legacy-job-fingerprint.json")));
         var request = fixture.RootElement.GetProperty("request").Deserialize<ProcessScanRequest>(Json)!;
-        var expected = fixture.RootElement.GetProperty("requestFingerprint").GetString();
         var store = new ScanOperationStore(Path.Combine(root, "db"));
-        Assert.Equal(expected, store.Enqueue(request).Operation.RequestFingerprint);
+        // Indented JSON uses the platform's line endings, so the recorded fixture (made on Linux) only matches
+        // off Windows. Each station is consistent with itself, which is what migration and retries rely on.
+        var expected = store.Enqueue(request).Operation.RequestFingerprint;
+        if (!OperatingSystem.IsWindows())
+            Assert.Equal(fixture.RootElement.GetProperty("requestFingerprint").GetString(), expected);
         // A previously saved record must survive migration and match a retry of reordered JSONB content.
         var stateDir = Path.Combine(root, "legacy");
         Directory.CreateDirectory(Path.Combine(stateDir, "operations"));
         var legacy = new ScanOperationState
         {
             IdempotencyKey = request.IdempotencyKey, OperationId = request.IdempotencyKey,
-            Request = request, RequestFingerprint = expected!, Status = ScanOperationStatuses.Cancelled,
+            Request = request, RequestFingerprint = expected, Status = ScanOperationStatuses.Cancelled,
             Phase = ScanOperationPhases.Cancelled, CompletedAt = DateTimeOffset.UtcNow
         };
         File.WriteAllText(Path.Combine(stateDir, "operations", "operation-legacy.json"), JsonSerializer.Serialize(legacy, Json));

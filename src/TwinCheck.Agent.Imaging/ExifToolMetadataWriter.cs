@@ -99,7 +99,23 @@ public sealed class ExifToolMetadataWriter : IScanMetadataWriter
     private static List<string> BaseArguments(string configPath) =>
         ["-config", configPath, "-charset", "UTF8", "-charset", "exif=UTF8", "-charset", "filename=UTF8"];
 
-    private string Run(IEnumerable<string> arguments)
+    private string Run(IReadOnlyList<string> arguments)
+    {
+        // -config must stay first on the command line. Everything else goes through a UTF-8 argument file:
+        // Windows hands command-line text to ExifTool in the ANSI code page, which mangles accented names.
+        var argumentFile = Path.Combine(Path.GetDirectoryName(arguments[1])!, $".exiftool-{Guid.NewGuid():N}.args");
+        File.WriteAllLines(argumentFile, arguments.Skip(2).Select(argument => argument.ReplaceLineEndings(" ")), new UTF8Encoding(false));
+        try
+        {
+            return RunProcess([arguments[0], arguments[1], "-@", argumentFile]);
+        }
+        finally
+        {
+            if (File.Exists(argumentFile)) File.Delete(argumentFile);
+        }
+    }
+
+    private string RunProcess(IEnumerable<string> arguments)
     {
         var startInfo = new ProcessStartInfo(executable!)
         {
