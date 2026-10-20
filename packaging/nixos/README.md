@@ -105,6 +105,19 @@ environment was also used, remove it with:
 systemctl --user unset-environment DOTNET_SYSTEM_IO_DISABLEFILELOCKING
 ```
 
+### Local staging and the upload queue
+
+Rolls are processed in local staging, `~/.local/state/TwinCheck/ScanAgent/staging`, and only the
+finished files are written to the NAS: one file at a time, through the upload queue shown on the
+GUI's **Uploads** page. ImageMagick and ExifTool never write to the NAS. Keep enough local disk space
+for several rolls, because rolls waiting to upload keep their local copy; the agent refuses to start a
+roll that doesn't fit. To use another local disk, set `"stagingDir"` in
+`~/.config/TwinCheck/ScanAgent/agent-config.json`. Don't point it at the NAS or at `/tmp`.
+
+Scanners must save each roll in its own folder inside the watch folder. After a roll is processed
+locally, its folder is renamed to `_processed-{order}-{roll}`; it is deleted once every file is
+verified on the NAS. See `docs/OPERATIONS.md` in the source repository for details.
+
 ## Update
 
 When a new release is published, update from the installed copy:
@@ -116,7 +129,7 @@ When a new release is published, update from the installed copy:
 The updater:
 
 - checks the latest [GitHub release](https://github.com/edrdmolina/TwinCheckAgent/releases/latest) and does nothing if you're already on it
-- refuses to run while scan jobs are queued or running
+- refuses to run while a roll is being processed locally; rolls waiting, watching, or uploading resume after the update, and it says how many uploads are queued
 - downloads the NixOS package and verifies its published SHA-256 checksum
 - reinstalls with the same install folder and agent URL, keeping profiles, the API key, logs, job history, and any `systemctl --user edit` override
 
@@ -155,11 +168,13 @@ Run the uninstaller from the extracted package or the installed directory:
 ~/.local/share/TwinCheck/ScanAgent/uninstall.sh
 ```
 
-The default uninstall removes the app, service, desktop launcher, and exported PFX/password while preserving profiles and logs. Remove everything owned by the app with:
+The default uninstall removes the app, service, desktop launcher, and exported PFX/password while preserving profiles, logs, job history, and rolls waiting to upload. Remove everything owned by the app with:
 
 ```bash
 ./uninstall.sh --purge-data
 ```
+
+`--purge-data` also deletes the local copies of rolls still waiting to upload. Check that the GUI's **Uploads** page shows nothing waiting first; the originals of a waiting roll stay in its `_processed-…` folder.
 
 If lingering was enabled and should also be disabled:
 

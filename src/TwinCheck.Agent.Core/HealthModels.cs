@@ -111,8 +111,7 @@ public sealed class HealthService(
             return 0;
         }
 
-        var count = ScannerFileSystem.CountImageFiles(root) > 0 ? 1 : 0;
-        count += Directory.EnumerateDirectories(root).Count(path => ScannerFileSystem.CountImageFiles(path) > 0);
-        return count;
+        return Directory.EnumerateDirectories(root)
+            .Count(path => !FileSystemSafety.IsProcessedFolder(path) && ScannerFileSystem.CountImageFiles(path) > 0);
     }
 }

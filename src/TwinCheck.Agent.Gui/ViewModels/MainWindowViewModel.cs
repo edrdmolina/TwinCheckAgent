@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using ReactiveUI;
@@ -32,6 +33,16 @@ public class MainWindowViewModel : ViewModelBase
     private ScanJobRow? _selectedJob;
     private ScanJobRow? _jobToCancel;
     private bool _isRefreshingJobs;
+    private string? _stagingDir;
+    private string _uploadsStatus = "Open Uploads to load the upload queue.";
+    private string _uploadActionMessage = "";
+    private bool _uploadsPaused;
+    private UploadRow? _selectedUpload;
+    private bool _isRefreshingUploads;
+    private string _cleanupStatus = "Click Scan to look for folders of originals that are safe to delete.";
+    private CleanupRow? _selectedCleanup;
+    private bool _isRefreshingCleanup;
+    private bool _cleanupLoaded;
 
     public MainWindowViewModel()
     {
@@ -60,6 +71,8 @@ public class MainWindowViewModel : ViewModelBase
         : "The agent runs as the twincheck-scan-agent systemd user service. Restart it with: systemctl --user restart twincheck-scan-agent.service";
     public ObservableCollection<ProfileEditor> Profiles { get; } = [];
     public ObservableCollection<ScanJobRow> ScanJobs { get; } = [];
+    public ObservableCollection<UploadRow> Uploads { get; } = [];
+    public ObservableCollection<CleanupRow> CleanupEntries { get; } = [];
     public ObservableCollection<ScannerModeOption> ScannerModeOptions { get; } =
     [
         new("Frontier Polling Watcher", ScannerModes.FrontierPollingWatch),
@@ -268,6 +281,7 @@ public class MainWindowViewModel : ViewModelBase
             this.RaisePropertyChanged(nameof(IsOverviewVisible));
             this.RaisePropertyChanged(nameof(IsProfilesVisible));
             this.RaisePropertyChanged(nameof(IsJobsVisible));
+            this.RaisePropertyChanged(nameof(IsUploadsVisible));
             this.RaisePropertyChanged(nameof(IsDiagnosticsVisible));
             this.RaisePropertyChanged(nameof(IsLogsVisible));
             this.RaisePropertyChanged(nameof(IsSetupVisible));
@@ -279,6 +293,7 @@ public class MainWindowViewModel : ViewModelBase
     public bool IsOverviewVisible => SelectedPage == "Overview";
     public bool IsProfilesVisible => SelectedPage == "Profiles";
     public bool IsJobsVisible => SelectedPage == "Jobs";
+    public bool IsUploadsVisible => SelectedPage == "Uploads";
     public bool IsDiagnosticsVisible => SelectedPage == "Diagnostics";
     public bool IsLogsVisible => SelectedPage == "Logs";
     public bool IsSetupVisible => SelectedPage == "Setup";
@@ -361,6 +376,78 @@ public class MainWindowViewModel : ViewModelBase
         ? ""
         : $"Cancel {_jobToCancel.RollLabel}? The source files will remain in place.";
 
+    public string UploadsStatus
+    {
+        get => _uploadsStatus;
+        set => this.RaiseAndSetIfChanged(ref _uploadsStatus, value);
+    }
+
+    public string UploadActionMessage
+    {
+        get => _uploadActionMessage;
+        set => this.RaiseAndSetIfChanged(ref _uploadActionMessage, value);
+    }
+
+    public bool UploadsPaused
+    {
+        get => _uploadsPaused;
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _uploadsPaused, value);
+            this.RaisePropertyChanged(nameof(PauseResumeLabel));
+        }
+    }
+
+    public string PauseResumeLabel => UploadsPaused ? "Resume Uploads" : "Pause Uploads";
+
+    public UploadRow? SelectedUpload
+    {
+        get => _selectedUpload;
+        set
+        {
+            this.RaiseAndSetIfChanged(ref _selectedUpload, value);
+            this.RaisePropertyChanged(nameof(SelectedUploadDetails));
+            this.RaisePropertyChanged(nameof(CanRetrySelectedUpload));
+            this.RaisePropertyChanged(nameof(HasSelectedUpload));
+        }
+    }
+
+    public bool HasSelectedUpload => SelectedUpload is not null;
+    public bool CanRetrySelectedUpload => SelectedUpload?.CanRetry == true;
+    public string SelectedUploadDetails => SelectedUpload?.Details ?? "Select a roll to see its folders, progress, and any error.";
+
+    public string CleanupStatus
+    {
+        get => _cleanupStatus;
+        set => this.RaiseAndSetIfChanged(ref _cleanupStatus, value);
+    }
+
+    public CleanupRow? SelectedCleanup
+    {
+        get => _selectedCleanup;
+        set
+        {
+            this.RaiseAndSetIfChanged(ref _selectedCleanup, value);
+            this.RaisePropertyChanged(nameof(CanDeleteSelectedCleanup));
+            this.RaisePropertyChanged(nameof(HasSelectedCleanup));
+        }
+    }
+
+    public bool HasSelectedCleanup => SelectedCleanup is not null;
+    public bool CanDeleteSelectedCleanup => SelectedCleanup?.Verified == true && !IsRefreshingCleanup;
+    public bool CanDeleteAllVerified => CleanupEntries.Any(entry => entry.Verified) && !IsRefreshingCleanup;
+
+    public bool IsRefreshingCleanup
+    {
+        get => _isRefreshingCleanup;
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _isRefreshingCleanup, value);
+            this.RaisePropertyChanged(nameof(CanDeleteSelectedCleanup));
+            this.RaisePropertyChanged(nameof(CanDeleteAllVerified));
+        }
+    }
+
     public bool IsRefreshingJobs
     {
         get => _isRefreshingJobs;
@@ -408,6 +495,7 @@ public class MainWindowViewModel : ViewModelBase
 
         AgentName = config.AgentName;
         ApiKey = config.ApiKey;
+        _stagingDir = config.StagingDir;
         Profiles.Clear();
         foreach (var profile in config.Profiles.Length > 0 ? config.Profiles : CreateDefaultConfig().Profiles)
         {
@@ -431,7 +519,8 @@ public class MainWindowViewModel : ViewModelBase
             AllowedSourceRoots = Profiles.Select(profile => Path.GetFullPath(profile.SourceDir)).Distinct().ToArray(),
             AllowedDestinationRoots = Profiles.Select(profile => Path.GetFullPath(profile.DestinationDir)).Distinct().ToArray(),
             ActiveProfileId = string.IsNullOrWhiteSpace(SelectedProfile?.Id) ? Profiles.FirstOrDefault()?.Id : SelectedProfile.Id.Trim(),
-            Profiles = Profiles.Select(profile => profile.ToProfile()).ToArray()
+            Profiles = Profiles.Select(profile => profile.ToProfile()).ToArray(),
+            StagingDir = _stagingDir
         };
 
         LocalAgentConfigStore.Save(config);
@@ -508,6 +597,10 @@ public class MainWindowViewModel : ViewModelBase
         {
             await RefreshJobsAsync();
         }
+        if (IsUploadsVisible)
+        {
+            await RefreshUploadsAsync();
+        }
         RefreshLogs();
         StatusMessage = $"Refreshed {DateTime.Now:t}";
     }
@@ -541,6 +634,141 @@ public class MainWindowViewModel : ViewModelBase
         {
             IsRefreshingJobs = false;
         }
+    }
+
+    public async Task RefreshUploadsAsync()
+    {
+        if (_isRefreshingUploads) return;
+        _isRefreshingUploads = true;
+        try
+        {
+            using var document = await GetAgentJson("/api/scan/uploads?limit=100");
+            UploadsPaused = document.RootElement.TryGetProperty("paused", out var paused) && paused.ValueKind == JsonValueKind.True;
+            var rows = document.RootElement.GetProperty("uploads").EnumerateArray().Select(UploadRow.FromJson).ToArray();
+            var selectedKey = SelectedUpload?.IdempotencyKey;
+            Uploads.Clear();
+            foreach (var row in rows)
+            {
+                Uploads.Add(row);
+            }
+            SelectedUpload = Uploads.FirstOrDefault(row => row.IdempotencyKey == selectedKey);
+            var waiting = rows.Count(row => !row.IsFinished);
+            UploadsStatus = (UploadsPaused ? "Uploads are paused. " : "")
+                + $"{waiting} roll(s) waiting or uploading, {rows.Length - waiting} finished. Updated {DateTime.Now:t}.";
+        }
+        catch (Exception exception)
+        {
+            UploadsStatus = $"Could not load uploads: {exception.Message}";
+        }
+        finally
+        {
+            _isRefreshingUploads = false;
+        }
+
+        if (!_cleanupLoaded)
+        {
+            await RefreshCleanupAsync();
+        }
+    }
+
+    public async Task TogglePauseUploadsAsync()
+    {
+        var action = UploadsPaused ? "resume" : "pause";
+        try
+        {
+            using var _ = await SendAgentJson(HttpMethod.Post, $"/api/scan/uploads/{action}");
+            UploadActionMessage = action == "pause"
+                ? "Uploads paused. The file being uploaded finishes first."
+                : "Uploads resumed.";
+        }
+        catch (Exception exception)
+        {
+            UploadActionMessage = $"Could not {action} uploads: {exception.Message}";
+        }
+        await RefreshUploadsAsync();
+    }
+
+    public async Task RetrySelectedUploadAsync()
+    {
+        var upload = SelectedUpload;
+        if (upload is null || !upload.CanRetry) return;
+        try
+        {
+            using var _ = await SendAgentJson(HttpMethod.Post, $"/api/scan/uploads/{Uri.EscapeDataString(upload.IdempotencyKey)}/retry");
+            UploadActionMessage = $"Retrying {upload.RollLabel} now.";
+        }
+        catch (Exception exception)
+        {
+            UploadActionMessage = $"Could not retry {upload.RollLabel}: {exception.Message}";
+        }
+        await RefreshUploadsAsync();
+    }
+
+    public async Task RefreshCleanupAsync()
+    {
+        if (IsRefreshingCleanup) return;
+        IsRefreshingCleanup = true;
+        CleanupStatus = "Scanning destinations for folders of originals...";
+        try
+        {
+            // Matching old archives to their manifests searches the destination, which can take a while.
+            using var document = await GetAgentJson("/api/scan/cleanup", TimeSpan.FromMinutes(5));
+            var rows = document.RootElement.GetProperty("entries").EnumerateArray().Select(CleanupRow.FromJson).ToArray();
+            var selectedPath = SelectedCleanup?.Path;
+            CleanupEntries.Clear();
+            foreach (var row in rows)
+            {
+                CleanupEntries.Add(row);
+            }
+            SelectedCleanup = CleanupEntries.FirstOrDefault(row => row.Path == selectedPath);
+            var verified = rows.Where(row => row.Verified).ToArray();
+            CleanupStatus = rows.Length == 0
+                ? $"Nothing to clean up. Checked {DateTime.Now:t}."
+                : $"{rows.Length} folder(s); {verified.Length} verified and safe to delete ({CleanupRow.FormatBytes(verified.Sum(row => row.SizeBytes))}). Checked {DateTime.Now:t}.";
+            _cleanupLoaded = true;
+        }
+        catch (Exception exception)
+        {
+            CleanupStatus = $"Could not scan for cleanup: {exception.Message}";
+        }
+        finally
+        {
+            IsRefreshingCleanup = false;
+        }
+    }
+
+    public async Task DeleteCleanupAsync(CleanupRow[] rows)
+    {
+        if (rows.Length == 0) return;
+        IsRefreshingCleanup = true;
+        try
+        {
+            var body = JsonSerializer.Serialize(new { paths = rows.Select(row => row.Path).ToArray() });
+            using var document = await SendAgentJson(
+                HttpMethod.Post,
+                "/api/scan/cleanup/delete",
+                new StringContent(body, Encoding.UTF8, "application/json"),
+                TimeSpan.FromMinutes(5));
+            var deleted = document.RootElement.GetProperty("deleted").GetArrayLength();
+            var skipped = document.RootElement.GetProperty("skipped").EnumerateArray()
+                .Select(skip => $"{Path.GetFileName(skip.GetProperty("path").GetString())}: {skip.GetProperty("reason").GetString()}")
+                .ToArray();
+            CleanupStatus = skipped.Length == 0
+                ? $"Deleted {deleted} folder(s)."
+                : $"Deleted {deleted} folder(s). Skipped {skipped.Length}: {string.Join("; ", skipped)}";
+        }
+        catch (Exception exception)
+        {
+            CleanupStatus = $"Could not delete: {exception.Message}";
+        }
+        finally
+        {
+            IsRefreshingCleanup = false;
+        }
+
+        var status = CleanupStatus;
+        await RefreshCleanupAsync();
+        CleanupStatus = $"{status} {CleanupStatus}";
     }
 
     public void BeginCancelSelectedJob()
@@ -668,9 +896,10 @@ public class MainWindowViewModel : ViewModelBase
         }
     }
 
-    private Task<JsonDocument> GetAgentJson(string path) => SendAgentJson(HttpMethod.Get, path);
+    private Task<JsonDocument> GetAgentJson(string path, TimeSpan? timeout = null) =>
+        SendAgentJson(HttpMethod.Get, path, timeout: timeout);
 
-    private async Task<JsonDocument> SendAgentJson(HttpMethod method, string path)
+    private async Task<JsonDocument> SendAgentJson(HttpMethod method, string path, HttpContent? content = null, TimeSpan? timeout = null)
     {
         using var handler = new HttpClientHandler
         {
@@ -679,9 +908,9 @@ public class MainWindowViewModel : ViewModelBase
         };
         using var client = new HttpClient(handler)
         {
-            Timeout = TimeSpan.FromSeconds(8)
+            Timeout = timeout ?? TimeSpan.FromSeconds(8)
         };
-        using var request = new HttpRequestMessage(method, AgentUrl + path);
+        using var request = new HttpRequestMessage(method, AgentUrl + path) { Content = content };
         request.Headers.Add("X-Api-Key", ApiKey);
         using var response = await client.SendAsync(request);
         if (!response.IsSuccessStatusCode && response.StatusCode != HttpStatusCode.Unauthorized)
@@ -845,6 +1074,138 @@ public sealed record ScanJobRow(
             ReadInt(value, "filesCompleted"),
             ReadInt(value, "fileCount"));
     }
+}
+
+public sealed record UploadRow(
+    string IdempotencyKey,
+    string ProfileId,
+    string OrderNumber,
+    string RollNumber,
+    string Status,
+    bool Stalled,
+    bool Paused,
+    int FilesUploaded,
+    int FileCount,
+    long BytesUploaded,
+    long TotalBytes,
+    string CurrentFile,
+    int Attempts,
+    string LastError,
+    string NextAttemptAt,
+    string QueuedAt,
+    string CompletedAt,
+    string StagingDir,
+    string FinalDir,
+    string SourceArchiveDir,
+    string CleanupWarning)
+{
+    public string RollLabel => $"{OrderNumber}-{RollNumber}";
+    public bool IsFinished => Status is UploadStatuses.Done or UploadStatuses.Failed;
+    public bool CanRetry => Status == UploadStatuses.Retrying;
+    public string StatusLabel => Status switch
+    {
+        _ when Stalled => "stalled — NAS not responding",
+        _ when Paused => "paused",
+        UploadStatuses.Uploading => $"uploading {FilesUploaded}/{FileCount}",
+        UploadStatuses.Retrying => $"retrying {FormatTime(NextAttemptAt)}",
+        _ => Status
+    };
+    public double ProgressPercent => Status == UploadStatuses.Done
+        ? 100
+        : TotalBytes > 0 ? Math.Min(100, BytesUploaded * 100.0 / TotalBytes) : 0;
+    public string ProgressLabel => $"{FilesUploaded}/{FileCount} files, {CleanupRow.FormatBytes(BytesUploaded)} of {CleanupRow.FormatBytes(TotalBytes)}";
+    public string QueuedLabel => FormatTime(QueuedAt);
+    public string Details => string.Join(Environment.NewLine, new[]
+    {
+        $"Roll: {RollLabel} ({IdempotencyKey})",
+        $"Scanner profile: {ProfileId}",
+        $"Status: {StatusLabel}",
+        $"Progress: {ProgressLabel}" + (string.IsNullOrWhiteSpace(CurrentFile) ? "" : $", now {CurrentFile}"),
+        $"Queued: {FormatTime(QueuedAt)}",
+        $"Finished: {FormatTime(CompletedAt)}",
+        $"Attempts: {Attempts}",
+        $"Last error: {LastError}",
+        $"Local copy: {StagingDir}",
+        $"Destination: {FinalDir}",
+        $"Original folder: {SourceArchiveDir}",
+        $"Cleanup: {(string.IsNullOrWhiteSpace(CleanupWarning) ? "" : CleanupWarning)}"
+    });
+
+    private static string FormatTime(string value) =>
+        DateTimeOffset.TryParse(value, out var time) ? time.ToLocalTime().ToString("g") : "";
+
+    public static UploadRow FromJson(JsonElement value) => new(
+        JsonRead.String(value, "idempotencyKey"),
+        JsonRead.String(value, "profileId"),
+        JsonRead.String(value, "orderNumber"),
+        JsonRead.String(value, "rollNumber"),
+        JsonRead.String(value, "status"),
+        JsonRead.Bool(value, "stalled"),
+        JsonRead.Bool(value, "paused"),
+        JsonRead.Int(value, "filesUploaded"),
+        JsonRead.Int(value, "fileCount"),
+        JsonRead.Long(value, "bytesUploaded"),
+        JsonRead.Long(value, "totalBytes"),
+        JsonRead.String(value, "currentFile"),
+        JsonRead.Int(value, "attempts"),
+        JsonRead.String(value, "lastError"),
+        JsonRead.String(value, "nextAttemptAt"),
+        JsonRead.String(value, "queuedAt"),
+        JsonRead.String(value, "completedAt"),
+        JsonRead.String(value, "stagingDir"),
+        JsonRead.String(value, "finalDir"),
+        JsonRead.String(value, "sourceArchiveDir"),
+        JsonRead.String(value, "cleanupWarning"));
+}
+
+public sealed record CleanupRow(
+    string Path,
+    string Kind,
+    string Name,
+    long SizeBytes,
+    int FileCount,
+    string ModifiedAt,
+    bool Verified,
+    string Reason,
+    string FinalDir)
+{
+    public string KindLabel => Kind == CleanupKinds.LegacyArchive ? "Old archive" : "Kept roll folder";
+    public string SizeLabel => $"{FormatBytes(SizeBytes)}, {FileCount} file(s)";
+    public string VerifiedLabel => Verified ? "Verified" : "Not verified";
+
+    public static string FormatBytes(long bytes) => bytes switch
+    {
+        >= 1024L * 1024 * 1024 => $"{bytes / (1024.0 * 1024 * 1024):F1} GB",
+        >= 1024L * 1024 => $"{bytes / (1024.0 * 1024):F1} MB",
+        >= 1024 => $"{bytes / 1024.0:F0} KB",
+        _ => $"{bytes} B"
+    };
+
+    public static CleanupRow FromJson(JsonElement value) => new(
+        JsonRead.String(value, "path"),
+        JsonRead.String(value, "kind"),
+        JsonRead.String(value, "name"),
+        JsonRead.Long(value, "sizeBytes"),
+        JsonRead.Int(value, "fileCount"),
+        JsonRead.String(value, "modifiedAt"),
+        JsonRead.Bool(value, "verified"),
+        JsonRead.String(value, "reason"),
+        JsonRead.String(value, "finalDir"));
+}
+
+internal static class JsonRead
+{
+    public static string String(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String ? property.GetString() ?? "" : "";
+
+    public static int Int(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.Number ? property.GetInt32() : 0;
+
+    public static long Long(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.Number ? property.GetInt64() : 0;
+
+    public static bool Bool(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.True;
 }
 
 public sealed class ProfileEditor : ReactiveObject

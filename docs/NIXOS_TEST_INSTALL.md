@@ -131,6 +131,10 @@ and 3600-second settle/watch limits. The agent's single-worker queue,
 source-change detection, staging checksums, and verification remain responsible
 for processing safety.
 
+Rolls are processed in local staging (`~/.local/state/TwinCheck/ScanAgent/staging`) and uploaded to
+the NAS one file at a time, so ImageMagick and ExifTool never write to the share. If the NAS stops
+answering, the roll shows `stalled — NAS not responding` on the GUI's **Uploads** page.
+
 After the acceptance scan, this command should produce no lost-lock output:
 
 ```bash
@@ -172,7 +176,8 @@ update each machine as the scanner user:
 ~/.local/share/TwinCheck/ScanAgent/update.sh
 ```
 
-It checks GitHub, refuses to run while jobs are active, verifies the package checksum, and runs
+It checks GitHub, refuses to run while a roll is being processed locally (queued uploads resume after
+the update), verifies the package checksum, and runs
 `reinstall.sh` with the same install folder and agent URL. Use `--check` to only report whether an
 update exists. Installs older than 0.1.2 don't have `update.sh`; reinstall those once by hand.
 

@@ -182,6 +182,12 @@ if FAKE_AGENT_OPERATIONS='{ "operations": [ { "status": "processing" } ] }' "$de
 fi
 [[ "$(installed_version)" == "0.1.0" ]]
 
+if FAKE_AGENT_OPERATIONS='{ "localProcessingActive": 1, "uploadsPending": 0, "operations": [] }' "$default_install/update.sh" 2>/dev/null; then
+    echo "update.sh ran while a roll was being processed locally." >&2
+    exit 1
+fi
+[[ "$(installed_version)" == "0.1.0" ]]
+
 good_checksum="$(cat "$release_dir/$archive_name.sha256")"
 printf '%064d  %s\n' 0 "$archive_name" > "$release_dir/$archive_name.sha256"
 if "$default_install/update.sh" 2>/dev/null; then
@@ -191,7 +197,9 @@ fi
 [[ "$(installed_version)" == "0.1.0" ]]
 printf '%s\n' "$good_checksum" > "$release_dir/$archive_name.sha256"
 
-FAKE_AGENT_OPERATIONS='{ "operations": [ { "status": "completed" } ] }' "$default_install/update.sh"
+update_output="$(FAKE_AGENT_OPERATIONS='{ "localProcessingActive": 0, "uploadsPending": 2, "operations": [ { "status": "processing", "phase": "uploading" } ] }' \
+    "$default_install/update.sh")"
+grep -Fq "2 queued upload(s) will resume" <<<"$update_output"
 [[ "$(installed_version)" == "0.2.0" ]]
 [[ "$(grep -o '"apiKey": "[^"]*"' "$config_file")" == "$api_key_before" ]]
 grep -Fq -- '--urls https://localhost:3625' "$default_install/twincheck-scan-agent-api"

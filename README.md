@@ -15,16 +15,18 @@ Local multi-OS scan agent and GUI for TwinCheckN. This project is the clean rebu
 
 The processor currently implements these rules:
 
-- Copy files into destination staging before final placement.
+- Process each roll on local disk (copy, BMP-to-TIFF conversion, metadata, checksums) before anything is written to the destination.
+- Upload processed rolls through a durable queue: one file at a time, oldest roll first, each copied to a hidden partial name, verified on the destination, then renamed into place.
 - Verify copied file length and SHA-256 checksum.
 - Never overwrite an existing destination file.
 - If a matching name exists with identical bytes, treat it as already done.
 - If a matching name exists with different bytes, write `-v2`, `-v3`, etc.
 - Route non-image files into `_review/` instead of deleting them.
-- Archive the original source folder under `_processed/` only after copy/verify succeeds.
+- Rename the roll folder to `_processed-{order}-{roll}` once it is processed locally, so the watch folder is clear for the next roll, and delete it only after every file is verified on the destination and the manifest is written.
 - Write a per-operation JSON manifest beside the committed roll folder.
 - Queue long-running scans and persist operation progress so browser timeouts or agent restarts do not lose completion state.
 - View recent jobs and their statuses in the agent GUI; cancel queued, watching, or settling jobs before file processing starts.
+- View, pause, resume, and retry the upload queue in the agent GUI, and delete verified folders of originals from Cleanup.
 - Store job tracking in local SQLite, with 30-day finished-job history, 180-day duplicate-request protection, and automatic migration from legacy job JSON files.
 - Embed customer name, film stock, and local scanner identity in delivered photo metadata; expose `scan-metadata-v1` when ExifTool is available.
 
@@ -96,11 +98,11 @@ The GUI writes this machine's local agent config to:
 
 Use the GUI to select the scanner source folder and destination folder, then save the active profile. The API reloads this local config on the next request.
 
-Profiles support Frontier polling, Frontier sentinel, and Noritsu daily-folder watching. Legacy `frontier-folder` and `noritsu-daily-watch` profile values are accepted as aliases. The source folder can be either the exact roll folder containing images or a source root with roll subfolders. If multiple roll subfolders are present during a direct process request, the agent refuses to guess and asks for the exact folder.
+Profiles support Frontier polling, Frontier sentinel, and Noritsu daily-folder watching. Legacy `frontier-folder` and `noritsu-daily-watch` profile values are accepted as aliases. Scans must be saved in a roll folder inside the watch folder; image files directly in the watch folder are ignored. A request can name the exact roll folder or the watch folder; given the watch folder, the agent uses its only roll folder and refuses to guess when there are several.
 
 Durable scan requests can set `waitForReady: true`. TwinCheckAgent then owns the watch and settle phases, takes the newest ready roll folder (for sentinel profiles, the newest folder with `export.done`, even if it was ready before the request), and processes only after the selected profile's readiness condition succeeds. If more than one roll folder with images or `export.done` is in the watch folder, the agent won't guess: the operation fails with `errorCode: "multiple-source-candidates"` and TwinCheckN asks the operator to choose a folder. Sentinel profiles always fail closed when `export.done` is absent, including legacy direct-process requests.
 
-Each profile can optionally convert BMP scans to uncompressed `.tif` output. Conversion is off by default, verifies exact pixel equality before publishing, and preserves the original BMP unchanged in the `_processed` archive.
+Each profile can optionally convert BMP scans to uncompressed `.tif` output. Conversion is off by default and verifies exact pixel equality before publishing. Like all originals, the BMP is deleted once the roll's upload is verified.
 
 New polling profiles use a 30-second stable window and separate 3600-second settle and watch timeouts. A settle timeout fails closed: the folder is not marked ready and no files are processed. Prefer `frontier-sentinel-watch` with `export.done` whenever the scanner workflow can create a completion marker.
 

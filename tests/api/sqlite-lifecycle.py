@@ -132,6 +132,7 @@ def main():
             with sqlite3.connect(root / "state/jobs.sqlite3") as database:
                 assert database.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
                 assert database.execute("PRAGMA auto_vacuum").fetchone()[0] == 2
+                assert database.execute("PRAGMA user_version").fetchone()[0] == 2
                 assert database.execute("SELECT COUNT(*) FROM job_keys").fetchone()[0] == 3
             assert not list(output.iterdir()), "Cancelling a waiting job must not produce scan output"
             print("Passed: migration, retention, HTTP 410/409/404, cancellation, restart, and database integrity.")

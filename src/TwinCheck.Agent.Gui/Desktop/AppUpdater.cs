@@ -28,6 +28,7 @@ public sealed class AppUpdater : ReactiveObject
     private readonly DispatcherTimer jobTimer;
     private VelopackAsset? ready;
     private int activeJobs;
+    private int pendingUploads;
     private bool isChecking;
     private bool isApplying;
 
@@ -45,8 +46,9 @@ public sealed class AppUpdater : ReactiveObject
     public string BannerText => ready is null
         ? ""
         : activeJobs > 0
-            ? $"Update {ready.Version} is ready. Waiting for {activeJobs} running job(s) to finish before it can be installed."
-            : $"Update {ready.Version} is ready. Restarting takes a few seconds; it also installs automatically the next time the app starts.";
+            ? $"Update {ready.Version} is ready. Waiting for {activeJobs} roll(s) being processed to finish before it can be installed."
+            : $"Update {ready.Version} is ready. Restarting takes a few seconds; it also installs automatically the next time the app starts."
+                + (pendingUploads > 0 ? $" {pendingUploads} queued upload(s) will resume after the restart." : "");
 
     public bool CanApply => ready is not null && activeJobs == 0 && !isApplying;
 
@@ -120,6 +122,7 @@ public sealed class AppUpdater : ReactiveObject
     private void RefreshActiveJobs()
     {
         activeJobs = agent.ActiveJobCount();
+        pendingUploads = agent.PendingUploadCount();
         RaiseChanged();
     }
 

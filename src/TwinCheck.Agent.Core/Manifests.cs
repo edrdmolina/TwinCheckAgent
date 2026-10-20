@@ -66,6 +66,7 @@ public sealed record RollbackScanRequest
 public sealed record RollbackScanResult(
     bool Ok,
     string ManifestPath,
+    // Named for compatibility; holds the _rolledback folder the files were moved to.
     string SourceArchiveDir,
     string FinalDir,
     int RestoredFileCount,

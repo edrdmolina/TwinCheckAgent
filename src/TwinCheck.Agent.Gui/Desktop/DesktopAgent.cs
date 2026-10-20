@@ -118,9 +118,12 @@ public sealed class DesktopAgent : ReactiveObject
         }
     }
 
+    /// <summary>Rolls being processed on local disk. Waiting, watching and uploading jobs survive a restart.</summary>
     public int ActiveJobCount() =>
-        app?.Services.GetRequiredService<ScanOperationService>().ListRecent(1)
-            .Count(job => !ScanOperationStatuses.IsTerminal(job.Status)) ?? 0;
+        app?.Services.GetRequiredService<ScanOperationService>().LocalProcessingCount() ?? 0;
+
+    public int PendingUploadCount() =>
+        app?.Services.GetRequiredService<UploadQueueService>().PendingCount ?? 0;
 
     public async Task StopAsync()
     {

@@ -24,6 +24,8 @@ public static class ScanOperationPhases
     public const string Verifying = "verifying";
     public const string Finalizing = "finalizing";
     public const string Archiving = "archiving";
+    /// <summary>Processed on local disk; files are going to the destination through the upload queue.</summary>
+    public const string Uploading = "uploading";
     public const string Complete = "complete";
     public const string Failed = "failed";
     public const string Cancelled = "cancelled";
@@ -146,14 +148,20 @@ public sealed record EnqueueScanOperationResult(ScanOperationState Operation, bo
 
 public sealed class ScanOperationService : IDisposable
 {
+    private static readonly TimeSpan IngestStallAfter = TimeSpan.FromMinutes(5);
+
     private readonly ScanOperationStore store;
     private readonly ScanProcessor processor;
     private readonly ScanWatchService watchService;
     private readonly ScanReadinessCoordinator readinessCoordinator;
     private readonly LocalAgentLogger logger;
+    private readonly UploadQueueService uploadQueue;
+    private readonly bool ownsUploadQueue;
+    private readonly StallMonitor ingestStalls;
     private readonly ConcurrentDictionary<string, Task> running = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, CancellationTokenSource> operationCancellations = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> profileGates = new(StringComparer.Ordinal);
+    // One roll is processed locally at a time across all scanners, so the NAS serves one reader at most.
     private readonly SemaphoreSlim processingGate = new(1, 1);
     private readonly CancellationTokenSource cancellation = new();
     private readonly object executionGate = new();
@@ -164,16 +172,50 @@ public sealed class ScanOperationService : IDisposable
         ScanProcessor processor,
         ScanWatchService watchService,
         LocalAgentLogger logger)
+        : this(store, processor, watchService, logger, new UploadQueueService(store, processor, watchService, logger), ownsUploadQueue: true)
+    {
+    }
+
+    public ScanOperationService(
+        ScanOperationStore store,
+        ScanProcessor processor,
+        ScanWatchService watchService,
+        LocalAgentLogger logger,
+        UploadQueueService uploadQueue)
+        : this(store, processor, watchService, logger, uploadQueue, ownsUploadQueue: false)
+    {
+    }
+
+    private ScanOperationService(
+        ScanOperationStore store,
+        ScanProcessor processor,
+        ScanWatchService watchService,
+        LocalAgentLogger logger,
+        UploadQueueService uploadQueue,
+        bool ownsUploadQueue)
     {
         this.store = store;
         this.processor = processor;
         this.watchService = watchService;
         readinessCoordinator = watchService.ReadinessCoordinator;
         this.logger = logger;
+        this.uploadQueue = uploadQueue;
+        this.ownsUploadQueue = ownsUploadQueue;
+        ingestStalls = new StallMonitor(IngestStallAfter, TimeSpan.FromSeconds(30), OnIngestStalled, _ => { });
 
         foreach (var operation in store.ListActive())
         {
-            store.Update(operation.IdempotencyKey, current => current with
+            if (operation.Phase == ScanOperationPhases.Uploading)
+            {
+                // The upload queue resumes these by itself.
+                if (uploadQueue.Get(operation.IdempotencyKey) is null)
+                {
+                    FailOperation(operation, "The upload record for this roll is missing, so it can't be resumed.", "upload-failed", operation.ResolvedSourceDir);
+                }
+                continue;
+            }
+
+            store.Update(operation.IdempotencyKey, current => ScanOperationStatuses.IsTerminal(current.Status) ? current : current with
             {
                 Status = ScanOperationStatuses.Queued,
                 Message = "Recovered after agent restart; scan workflow resumed."
@@ -182,6 +224,14 @@ public sealed class ScanOperationService : IDisposable
         }
         maintenance = RunMaintenanceAsync();
     }
+
+    public UploadQueueService Uploads => uploadQueue;
+
+    /// <summary>Jobs copying, converting or verifying on local disk. Updates wait for these to finish.</summary>
+    public int LocalProcessingCount() =>
+        store.ListActive().Count(operation => operation.Status == ScanOperationStatuses.Processing
+            && operation.Phase is ScanOperationPhases.Hashing or ScanOperationPhases.Copying or ScanOperationPhases.Verifying
+                or ScanOperationPhases.Finalizing or ScanOperationPhases.Archiving);
 
     public EnqueueScanOperationResult Enqueue(ProcessScanRequest request)
     {
@@ -259,6 +309,8 @@ public sealed class ScanOperationService : IDisposable
         {
             // The persisted operation will be recovered on the next start.
         }
+        ingestStalls.Dispose();
+        if (ownsUploadQueue) uploadQueue.Dispose();
         cancellation.Dispose();
     }
 
@@ -434,6 +486,18 @@ public sealed class ScanOperationService : IDisposable
     private void ProcessReadyOperation(ScanOperationState operation, ProcessScanRequest effectiveRequest)
     {
         var idempotencyKey = operation.IdempotencyKey;
+        var existingUpload = uploadQueue.Get(idempotencyKey);
+        if (existingUpload is not null && existingUpload.Status != UploadStatuses.Handoff)
+        {
+            // Processed locally before a restart: the upload queue owns this roll now.
+            if (!UploadStatuses.IsFinished(existingUpload.Status))
+            {
+                MarkUploading(idempotencyKey, existingUpload, "Processed locally; waiting to upload to the destination.");
+                uploadQueue.Wake();
+            }
+            return;
+        }
+
         var stopwatch = Stopwatch.StartNew();
         var lastPhase = store.Get(idempotencyKey).Phase;
         store.Update(idempotencyKey, current => current with
@@ -445,45 +509,75 @@ public sealed class ScanOperationService : IDisposable
         watchService.MarkProcessing(effectiveRequest.WatchId, idempotencyKey);
         logger.Info($"Scan operation {idempotencyKey} started.");
 
-        var result = processor.Process(effectiveRequest, progress =>
+        IngestResult ingested;
+        try
         {
-            if (!string.Equals(lastPhase, progress.Phase, StringComparison.Ordinal))
+            ingestStalls.Touch(idempotencyKey, "starting local processing");
+            ingested = processor.Ingest(effectiveRequest, progress =>
             {
-                logger.Info($"Scan operation {idempotencyKey} phase {lastPhase} completed after {stopwatch.Elapsed}.");
-                lastPhase = progress.Phase;
-                stopwatch.Restart();
-            }
+                if (!string.Equals(lastPhase, progress.Phase, StringComparison.Ordinal))
+                {
+                    logger.Info($"Scan operation {idempotencyKey} phase {lastPhase} completed after {stopwatch.Elapsed}.");
+                    lastPhase = progress.Phase;
+                    stopwatch.Restart();
+                }
 
-            store.Update(idempotencyKey, current => current with
-            {
-                Status = ScanOperationStatuses.Processing,
-                Phase = progress.Phase,
-                FilesCompleted = progress.FilesCompleted,
-                FileCount = progress.FileCount,
-                BytesCompleted = progress.BytesCompleted,
-                TotalBytes = progress.TotalBytes,
-                Message = progress.Message
-            });
+                ingestStalls.Touch(idempotencyKey, progress.Message ?? $"{progress.Phase} {progress.FilesCompleted}/{progress.FileCount}");
+                store.Update(idempotencyKey, current => current with
+                {
+                    Status = ScanOperationStatuses.Processing,
+                    Phase = progress.Phase,
+                    FilesCompleted = progress.FilesCompleted,
+                    FileCount = progress.FileCount,
+                    BytesCompleted = progress.BytesCompleted,
+                    TotalBytes = progress.TotalBytes,
+                    Message = progress.Message ?? current.Message
+                });
+            }, uploadQueue.Register);
+        }
+        catch
+        {
+            uploadQueue.DiscardHandoff(idempotencyKey);
+            throw;
+        }
+        finally
+        {
+            ingestStalls.Clear(idempotencyKey);
+        }
+
+        if (ingested.Completed is { } result)
+        {
+            ScanJobTransitions.Complete(store, watchService, logger, idempotencyKey, result, null);
+            return;
+        }
+
+        var upload = ingested.Upload!;
+        MarkUploading(idempotencyKey, upload, "Processed locally; waiting to upload to the destination.");
+        uploadQueue.Activate(upload);
+        logger.Info($"Scan operation {idempotencyKey} phase {lastPhase} completed after {stopwatch.Elapsed}; queued {upload.Files.Count} file(s) for upload.");
+    }
+
+    private void MarkUploading(string idempotencyKey, UploadRoll upload, string message) =>
+        store.Update(idempotencyKey, current => ScanOperationStatuses.IsTerminal(current.Status) ? current : current with
+        {
+            Status = ScanOperationStatuses.Processing,
+            Phase = ScanOperationPhases.Uploading,
+            FilesCompleted = upload.FilesUploaded,
+            FileCount = upload.Files.Count,
+            BytesCompleted = upload.BytesUploaded,
+            TotalBytes = upload.TotalBytes,
+            ResolvedSourceDir = upload.SourceDir,
+            Message = message
         });
 
-        var completed = store.Update(idempotencyKey, current => current with
+    private void OnIngestStalled(string idempotencyKey, string step, TimeSpan idle)
+    {
+        var minutes = Math.Max(1, (int)idle.TotalMinutes);
+        logger.Warning($"Scan operation {idempotencyKey} made no progress for {minutes} minute(s) while: {step}");
+        store.Update(idempotencyKey, current => ScanOperationStatuses.IsTerminal(current.Status) ? current : current with
         {
-            Status = ScanOperationStatuses.Completed,
-            Phase = ScanOperationPhases.Complete,
-            FilesCompleted = result.Manifest.Files.Count,
-            FileCount = result.Manifest.Files.Count,
-            BytesCompleted = result.Manifest.Files.Sum(file => file.Size),
-            TotalBytes = result.Manifest.Files.Sum(file => file.Size),
-            CompletedAt = DateTimeOffset.UtcNow,
-            Message = $"Completed {result.ImageCount} image(s).",
-            Error = null,
-            ErrorCode = null,
-            ErrorSourceDir = null,
-            ResolvedSourceDir = result.Manifest.SourceDir,
-            Result = result
+            Message = $"No progress for {minutes} minute(s) ({step}). The scanner share may not be responding."
         });
-        watchService.MarkCompleted(effectiveRequest.WatchId, idempotencyKey, completed.Message);
-        logger.Info($"Scan operation {idempotencyKey} completed. Images: {result.ImageCount}.");
     }
 
     private bool ShouldWaitForReadiness(ScanOperationState operation) =>
@@ -491,25 +585,96 @@ public sealed class ScanOperationService : IDisposable
         && string.IsNullOrWhiteSpace(operation.ResolvedSourceDir)
         && operation.Phase is ScanOperationPhases.Queued or ScanOperationPhases.Watching or ScanOperationPhases.Settling;
 
-    private void FailOperation(ScanOperationState operation, string error, string? errorCode, string? errorSourceDir)
+    private void FailOperation(ScanOperationState operation, string error, string? errorCode, string? errorSourceDir) =>
+        ScanJobTransitions.Fail(store, watchService, logger, operation.IdempotencyKey, error, errorCode, errorSourceDir);
+}
+
+/// <summary>Terminal job updates shared by local processing and the upload queue.</summary>
+internal static class ScanJobTransitions
+{
+    public static void Complete(
+        ScanOperationStore store,
+        ScanWatchService watchService,
+        LocalAgentLogger logger,
+        string idempotencyKey,
+        ProcessScanResult result,
+        string? note)
     {
-        var failed = store.Update(operation.IdempotencyKey, current => ScanOperationStatuses.IsTerminal(current.Status) ? current : current with
+        ScanOperationState? before = null;
+        ScanOperationState completed;
+        try
         {
-            Status = ScanOperationStatuses.Failed,
-            Phase = ScanOperationPhases.Failed,
-            CompletedAt = DateTimeOffset.UtcNow,
-            Message = errorCode is "watch-timeout" or "settle-timeout"
-                ? "Scanner output did not become ready."
-                : "Scan processing failed.",
-            Error = error,
-            ErrorCode = errorCode,
-            ErrorSourceDir = errorSourceDir
-        });
-        if (failed.Status != ScanOperationStatuses.Failed)
+            completed = store.Update(idempotencyKey, current =>
+            {
+                before = current;
+                return ScanOperationStatuses.IsTerminal(current.Status) ? current : current with
+                {
+                    Status = ScanOperationStatuses.Completed,
+                    Phase = ScanOperationPhases.Complete,
+                    FilesCompleted = result.Manifest.Files.Count,
+                    FileCount = result.Manifest.Files.Count,
+                    BytesCompleted = result.Manifest.Files.Sum(file => file.Size),
+                    TotalBytes = result.Manifest.Files.Sum(file => file.Size),
+                    CompletedAt = DateTimeOffset.UtcNow,
+                    Message = note is null ? $"Completed {result.ImageCount} image(s)." : $"Completed {result.ImageCount} image(s). {note}",
+                    Error = null,
+                    ErrorCode = null,
+                    ErrorSourceDir = null,
+                    ResolvedSourceDir = result.Manifest.SourceDir,
+                    Result = result
+                };
+            });
+        }
+        catch (Exception exception) when (exception is KeyNotFoundException or ScanOperationHistoryExpiredException)
         {
             return;
         }
-        watchService.MarkFailed(operation.Request.WatchId, operation.IdempotencyKey, failed.Error);
-        logger.Warning($"Scan operation {operation.IdempotencyKey} failed{(errorCode is null ? "" : $" ({errorCode})")}: {error}");
+
+        if (ScanOperationStatuses.IsTerminal(before!.Status)) return;
+        watchService.MarkCompleted(completed.Request.WatchId, idempotencyKey, completed.Message);
+        logger.Info($"Scan operation {idempotencyKey} completed. Images: {result.ImageCount}.");
+    }
+
+    public static void Fail(
+        ScanOperationStore store,
+        ScanWatchService watchService,
+        LocalAgentLogger logger,
+        string idempotencyKey,
+        string error,
+        string? errorCode,
+        string? errorSourceDir)
+    {
+        ScanOperationState? before = null;
+        ScanOperationState failed;
+        try
+        {
+            failed = store.Update(idempotencyKey, current =>
+            {
+                before = current;
+                return ScanOperationStatuses.IsTerminal(current.Status) ? current : current with
+                {
+                    Status = ScanOperationStatuses.Failed,
+                    Phase = ScanOperationPhases.Failed,
+                    CompletedAt = DateTimeOffset.UtcNow,
+                    Message = errorCode is "watch-timeout" or "settle-timeout"
+                        ? "Scanner output did not become ready."
+                        : errorCode == "upload-failed" ? "Upload to the destination failed." : "Scan processing failed.",
+                    Error = error,
+                    ErrorCode = errorCode,
+                    ErrorSourceDir = errorSourceDir
+                };
+            });
+        }
+        catch (Exception exception) when (exception is KeyNotFoundException or ScanOperationHistoryExpiredException)
+        {
+            return;
+        }
+
+        if (failed.Status != ScanOperationStatuses.Failed || ScanOperationStatuses.IsTerminal(before!.Status))
+        {
+            return;
+        }
+        watchService.MarkFailed(failed.Request.WatchId, idempotencyKey, failed.Error);
+        logger.Warning($"Scan operation {idempotencyKey} failed{(errorCode is null ? "" : $" ({errorCode})")}: {error}");
     }
 }

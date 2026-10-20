@@ -48,7 +48,8 @@ ProgramData are left in place; delete them once you've confirmed everything work
 The app checks for a new release every 6 hours and downloads it in the background. When an
 update is ready, a blue banner appears with **Restart to update**:
 
-- The button is disabled while scan jobs are running and enables once they finish.
+- The button is disabled while a roll is being processed on this computer and enables once it
+  finishes. Rolls waiting, watching, or uploading resume after the restart.
 - Restarting takes a few seconds. TwinCheckN can't reach the agent during that time.
 - If nobody clicks the button, the update installs the next time the app starts, for
   example after a reboot or the next sign-in.
@@ -57,6 +58,11 @@ update is ready, a blue banner appears with **Restart to update**:
 
 The agent runs as the signed-in user, so it can reach any share that user can open in
 File Explorer, including mapped drive letters. No separate service account is needed.
+
+Rolls are processed in local staging and then uploaded to the destination one file at a time;
+the **Uploads** page shows the queue. Keep enough local disk space for several rolls. Scanners must
+save each roll in its own folder inside the watch folder; after processing, the folder is renamed
+to `_processed-{order}-{roll}` and deleted once every file is verified on the destination.
 
 ## Uninstall
 
@@ -70,7 +76,8 @@ sign-in startup entry. Profiles, the API key, job history, and logs are kept in
 |------|-------|
 | App | `%LocalAppData%\TwinCheckScanAgent` |
 | Config and API key | `%AppData%\TwinCheck\ScanAgent\agent-config.json` |
-| Job history | `%AppData%\TwinCheck\ScanAgent\jobs.sqlite3` |
+| Job history and upload queue | `%AppData%\TwinCheck\ScanAgent\jobs.sqlite3` |
+| Local staging (rolls waiting to upload) | `%LocalAppData%\TwinCheck\ScanAgent\staging` |
 | Logs | `%AppData%\TwinCheck\ScanAgent\logs` |
 | HTTPS certificate | Current user's certificate store, "TwinCheck Scan Agent Localhost" |
 

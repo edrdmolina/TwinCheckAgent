@@ -11,6 +11,7 @@ public sealed class ExifToolMetadataWriter : IScanMetadataWriter
     public const string PathEnvironmentVariable = "TWINCHECK_EXIFTOOL_PATH";
     private readonly string? executable;
     private static readonly TimeSpan Timeout = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan KillWait = TimeSpan.FromSeconds(10);
     private const string Config = """
         %Image::ExifTool::UserDefined = (
             'Image::ExifTool::XMP::Main' => {
@@ -113,7 +114,8 @@ public sealed class ExifToolMetadataWriter : IScanMetadataWriter
         if (!process.WaitForExit((int)Timeout.TotalMilliseconds))
         {
             process.Kill(entireProcessTree: true);
-            process.WaitForExit();
+            // A process stuck in a hung file write can't exit even when killed; don't wait for it forever.
+            process.WaitForExit(KillWait);
             throw new ScanMetadataWriteException("ExifTool timed out while editing/verifying photo metadata.");
         }
         var stderr = error.GetAwaiter().GetResult();

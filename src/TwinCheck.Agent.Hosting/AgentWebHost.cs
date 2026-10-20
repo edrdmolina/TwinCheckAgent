@@ -22,6 +22,8 @@ public sealed record AgentHostOptions
     public string? ContentRootPath { get; init; }
 }
 
+public sealed record CleanupDeleteRequest(string[]? Paths);
+
 public static class AgentWebHost
 {
     public static WebApplication Create(string[] args, AgentHostOptions? hostOptions = null)
@@ -51,11 +53,14 @@ public static class AgentWebHost
         builder.Services.AddSingleton<ScanOperationStore>();
         builder.Services.AddSingleton<IScanImageConverter, MagickScanImageConverter>();
         builder.Services.AddSingleton<IScanMetadataWriter, ExifToolMetadataWriter>();
+        builder.Services.AddSingleton<DestinationWriteLock>();
         builder.Services.AddSingleton<ScanProcessor>();
         builder.Services.AddSingleton<SourceCandidateService>();
         builder.Services.AddSingleton<ScanReadinessCoordinator>();
         builder.Services.AddSingleton<ScanWatchService>();
+        builder.Services.AddSingleton<UploadQueueService>();
         builder.Services.AddSingleton<ScanOperationService>();
+        builder.Services.AddSingleton<CleanupService>();
         builder.Services.AddSingleton<RollbackService>();
         builder.Services.AddSingleton<HealthService>();
         builder.Services.AddSingleton<DiagnosticsService>();
@@ -150,6 +155,8 @@ public static class AgentWebHost
                 "/api/scan/candidates",
                 "/api/scan/watch/start",
                 "/api/scan/operations",
+                "/api/scan/uploads",
+                "/api/scan/cleanup",
                 "/api/scan/process",
                 "/api/scan/manifests",
                 "/api/scan/manifest",
@@ -339,7 +346,62 @@ public static class AgentWebHost
         app.MapGet("/api/scan/operations", (HttpRequest request, ScanOperationService operationService) =>
         {
             var limit = int.TryParse(request.Query["limit"].ToString(), out var parsed) ? parsed : 100;
-            return Results.Ok(new { ok = true, operations = operationService.ListRecent(limit) });
+            return Results.Ok(new
+            {
+                ok = true,
+                // Updaters wait only for local processing; queued uploads resume after a restart.
+                localProcessingActive = operationService.LocalProcessingCount(),
+                uploadsPending = operationService.Uploads.PendingCount,
+                operations = operationService.ListRecent(limit)
+            });
+        });
+
+        app.MapGet("/api/scan/uploads", (HttpRequest request, UploadQueueService uploads) =>
+        {
+            var limit = int.TryParse(request.Query["limit"].ToString(), out var parsed) ? parsed : 100;
+            return Results.Ok(new { ok = true, paused = uploads.Paused, uploads = uploads.List(limit) });
+        });
+
+        app.MapPost("/api/scan/uploads/pause", (UploadQueueService uploads) =>
+        {
+            uploads.Pause();
+            return Results.Ok(new { ok = true, paused = true });
+        });
+
+        app.MapPost("/api/scan/uploads/resume", (UploadQueueService uploads) =>
+        {
+            uploads.Resume();
+            return Results.Ok(new { ok = true, paused = false });
+        });
+
+        app.MapPost("/api/scan/uploads/{idempotencyKey}/retry", (string idempotencyKey, UploadQueueService uploads) =>
+            uploads.RetryNow(idempotencyKey)
+                ? Results.Ok(new { ok = true })
+                : Results.Conflict(new { ok = false, error = "This upload is not waiting to retry." }));
+
+        app.MapGet("/api/scan/cleanup", (CleanupService cleanup) =>
+        {
+            try
+            {
+                return Results.Ok(new { ok = true, entries = cleanup.List() });
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return Results.BadRequest(new { ok = false, error = exception.Message });
+            }
+        });
+
+        app.MapPost("/api/scan/cleanup/delete", (CleanupDeleteRequest request, CleanupService cleanup) =>
+        {
+            try
+            {
+                var result = cleanup.Delete(request.Paths ?? []);
+                return Results.Ok(new { ok = true, result.Deleted, result.Skipped });
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return Results.BadRequest(new { ok = false, error = exception.Message });
+            }
         });
 
         app.MapPost("/api/scan/operations/{idempotencyKey}/cancel", (string idempotencyKey, ScanOperationService operationService) =>

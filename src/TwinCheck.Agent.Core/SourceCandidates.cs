@@ -42,22 +42,10 @@ public sealed class SourceCandidateService(AgentConfigProvider configProvider)
             throw new DirectoryNotFoundException($"Source directory does not exist: {sourceRoot}");
         }
 
+        // Rolls are always folders inside the watch folder; loose files there are never a roll.
         var candidates = new List<SourceCandidate>();
-        var rootImageCount = ScannerFileSystem.CountImageFiles(sourceRoot);
-        if (rootImageCount > 0)
-        {
-            candidates.Add(CreateCandidate(
-                profile,
-                sourceRoot,
-                rootImageCount,
-                true,
-                orderNumber,
-                rollNumber,
-                scanKind,
-                rescanNumber));
-        }
-
         candidates.AddRange(Directory.EnumerateDirectories(sourceRoot)
+            .Where(path => !FileSystemSafety.IsProcessedFolder(path))
             .Select(path => CreateCandidate(
                 profile,
                 path,

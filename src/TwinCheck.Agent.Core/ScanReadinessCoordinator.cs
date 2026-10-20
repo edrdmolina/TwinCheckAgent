@@ -33,9 +33,15 @@ public sealed class ScanReadinessCoordinator(AgentConfigProvider configProvider)
             ? FileSystemSafety.EnsureInsideAnyRoot(request.SourceDir, config.AllowedSourceRoots, "source")
             : null;
         var configuredSource = FileSystemSafety.EnsureInsideAnyRoot(profile.SourceDir, config.AllowedSourceRoots, "source");
-        var watchRoot = explicitSource ?? (scannerMode == ScannerModes.NoritsuWatch
+        var defaultWatchRoot = scannerMode == ScannerModes.NoritsuWatch
             ? ScannerFileSystem.GetNoritsuDailyFolder(configuredSource)
-            : configuredSource);
+            : configuredSource;
+        // A chosen source is a roll folder. The watch folder itself is never a roll, so choosing it means "watch".
+        if (explicitSource is not null && (PathsEqual(explicitSource, configuredSource) || PathsEqual(explicitSource, defaultWatchRoot)))
+        {
+            explicitSource = null;
+        }
+        var watchRoot = explicitSource ?? defaultWatchRoot;
 
         if (scannerMode == ScannerModes.NoritsuWatch && explicitSource is null)
         {
@@ -188,6 +194,10 @@ public sealed class ScanReadinessCoordinator(AgentConfigProvider configProvider)
             .ThenByDescending(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
+    /// <summary>
+    /// Rolls are always folders inside the watch folder. Loose files in the watch folder are ignored, and so
+    /// are <c>_processed-…</c> folders waiting for their upload.
+    /// </summary>
     private static IEnumerable<string> EnumerateCandidateDirectories(string watchRoot, bool explicitSource)
     {
         if (!Directory.Exists(watchRoot))
@@ -195,14 +205,15 @@ public sealed class ScanReadinessCoordinator(AgentConfigProvider configProvider)
             return [];
         }
 
-        if (explicitSource
-            || Directory.EnumerateFiles(watchRoot).Any(path => FileSystemSafety.IsImageFile(path)
-                || string.Equals(Path.GetFileName(path), FileSystemSafety.ExportSentinelFileName, StringComparison.OrdinalIgnoreCase)))
+        if (explicitSource)
         {
             return [Path.GetFullPath(watchRoot)];
         }
 
-        return Directory.EnumerateDirectories(watchRoot).Select(Path.GetFullPath).ToArray();
+        return Directory.EnumerateDirectories(watchRoot)
+            .Where(path => !FileSystemSafety.IsProcessedFolder(path))
+            .Select(Path.GetFullPath)
+            .ToArray();
     }
 
     private static SourceCandidate CreateCandidate(
@@ -260,7 +271,9 @@ public sealed class ScanReadinessCoordinator(AgentConfigProvider configProvider)
     };
 
     private static bool PathsEqual(string left, string right) =>
-        PathComparer.Equals(Path.GetFullPath(left), Path.GetFullPath(right));
+        PathComparer.Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)));
 
     private static StringComparer PathComparer =>
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;

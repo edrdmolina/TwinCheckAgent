@@ -197,7 +197,7 @@ public sealed class ScanOperationStoreTests : IDisposable
     public void NewerSchemaIsNotSilentlyDowngraded()
     {
         var store = new ScanOperationStore(root);
-        Execute(store.DatabasePath, "PRAGMA user_version=2");
+        Execute(store.DatabasePath, "PRAGMA user_version=3");
         Assert.Throws<InvalidOperationException>(() => new ScanOperationStore(root));
     }
 

@@ -6,6 +6,12 @@ public static class FileSystemSafety
 {
     public const string ExportSentinelFileName = "export.done";
 
+    /// <summary>A roll folder renamed after local processing; it waits here until its upload is verified.</summary>
+    public const string ProcessedFolderPrefix = "_processed-";
+
+    public static bool IsProcessedFolder(string path) =>
+        Path.GetFileName(Path.TrimEndingDirectorySeparator(path)).StartsWith(ProcessedFolderPrefix, StringComparison.OrdinalIgnoreCase);
+
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".jpg",
@@ -60,10 +66,15 @@ public static class FileSystemSafety
         return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
 
+    /// <param name="flushEveryBytes">
+    /// For network destinations: force written data to the server at this interval so unsent data never
+    /// piles up into one huge flush when the file closes (where NFS writes were seen to hang).
+    /// </param>
     public static (long Length, string Sha256) CopyWithSha256(
         string sourcePath,
         string destinationPath,
-        Action<long>? onBytesCopied = null)
+        Action<long>? onBytesCopied = null,
+        long? flushEveryBytes = null)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
         var before = new FileInfo(sourcePath);
@@ -74,12 +85,19 @@ public static class FileSystemSafety
         using var destination = new FileStream(destinationPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1024 * 1024, FileOptions.SequentialScan);
         var buffer = new byte[1024 * 1024];
         long copied = 0;
+        long unflushed = 0;
         int read;
         while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
         {
             destination.Write(buffer, 0, read);
             hash.AppendData(buffer, 0, read);
             copied += read;
+            unflushed += read;
+            if (unflushed >= flushEveryBytes)
+            {
+                destination.Flush(flushToDisk: true);
+                unflushed = 0;
+            }
             onBytesCopied?.Invoke(read);
         }
 
@@ -118,9 +136,9 @@ public static class FileSystemSafety
         }
     }
 
-    public static void CopyAndVerify(string sourcePath, string destinationPath)
+    public static void CopyAndVerify(string sourcePath, string destinationPath, long? flushEveryBytes = null)
     {
-        var copied = CopyWithSha256(sourcePath, destinationPath);
+        var copied = CopyWithSha256(sourcePath, destinationPath, flushEveryBytes: flushEveryBytes);
         VerifySha256(destinationPath, copied.Length, copied.Sha256);
     }
 

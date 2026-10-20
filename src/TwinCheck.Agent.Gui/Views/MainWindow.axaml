@@ -33,6 +33,7 @@
                         <Button Classes="nav" Classes.active="{Binding IsOverviewVisible}" Content="Overview" Click="Overview_Click"/>
                         <Button Classes="nav" Classes.active="{Binding IsProfilesVisible}" Content="Profiles" Click="Profiles_Click"/>
                         <Button Classes="nav" Classes.active="{Binding IsJobsVisible}" Content="Jobs" Click="Jobs_Click"/>
+                        <Button Classes="nav" Classes.active="{Binding IsUploadsVisible}" Content="Uploads" Click="Uploads_Click"/>
                         <Button Classes="nav" Classes.active="{Binding IsDiagnosticsVisible}" Content="Diagnostics" Click="Diagnostics_Click"/>
                         <Button Classes="nav" Classes.active="{Binding IsLogsVisible}" Content="Logs" Click="Logs_Click"/>
                         <Button Classes="nav" Classes.active="{Binding IsSetupVisible}" Content="Setup" Click="Setup_Click"/>
@@ -264,6 +265,101 @@
                             <StackPanel Spacing="10">
                                 <TextBlock Text="Selected job details" FontSize="17" FontWeight="SemiBold"/>
                                 <TextBlock Text="{Binding SelectedJobDetails}" FontFamily="Consolas, Menlo, monospace" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel IsVisible="{Binding IsUploadsVisible}" Spacing="16">
+                        <Border Classes="card">
+                            <StackPanel Spacing="12">
+                                <DockPanel LastChildFill="True">
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="8">
+                                        <Button Content="{Binding PauseResumeLabel}" Click="PauseResumeUploads_Click"/>
+                                        <Button Content="Refresh Uploads" Click="RefreshUploads_Click"/>
+                                    </StackPanel>
+                                    <TextBlock Text="Upload queue" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <TextBlock Text="{Binding UploadsStatus}" TextWrapping="Wrap" Foreground="#64748B"/>
+                                <TextBlock Text="{Binding UploadActionMessage}" TextWrapping="Wrap" Foreground="#334155"/>
+                                <TextBlock Text="Rolls are processed on this computer first, then sent to the destination one file at a time, oldest roll first. A roll's original folder is deleted once every file is verified on the destination." TextWrapping="Wrap" Foreground="#475569"/>
+                                <Grid ColumnDefinitions="150,130,210,*,140" Margin="12,4,4,0">
+                                    <TextBlock Grid.Column="0" Text="Roll" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Column="1" Text="Profile" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Column="2" Text="Status" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Column="3" Text="Progress" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Column="4" Text="Queued" FontWeight="SemiBold"/>
+                                </Grid>
+                                <ListBox ItemsSource="{Binding Uploads}"
+                                         SelectedItem="{Binding SelectedUpload, Mode=TwoWay}"
+                                         MinHeight="200" MaxHeight="340">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid ColumnDefinitions="150,130,210,*,140" Margin="4,6">
+                                                <TextBlock Grid.Column="0" Text="{Binding RollLabel}" FontWeight="SemiBold"/>
+                                                <TextBlock Grid.Column="1" Text="{Binding ProfileId}"/>
+                                                <TextBlock Grid.Column="2" Text="{Binding StatusLabel}" TextWrapping="Wrap"/>
+                                                <StackPanel Grid.Column="3" Spacing="4" Margin="0,0,12,0">
+                                                    <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressPercent}" Height="8"/>
+                                                    <TextBlock Text="{Binding ProgressLabel}" FontSize="12" Foreground="#64748B"/>
+                                                </StackPanel>
+                                                <TextBlock Grid.Column="4" Text="{Binding QueuedLabel}"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button Content="Retry Now" IsEnabled="{Binding CanRetrySelectedUpload}" Click="RetryUpload_Click"/>
+                                    <Button Content="Open Local Copy" IsEnabled="{Binding HasSelectedUpload}" Click="OpenUploadLocal_Click"/>
+                                    <Button Content="Open Destination" IsEnabled="{Binding HasSelectedUpload}" Click="OpenUploadDestination_Click"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Classes="card">
+                            <StackPanel Spacing="10">
+                                <TextBlock Text="Selected upload details" FontSize="17" FontWeight="SemiBold"/>
+                                <TextBlock Text="{Binding SelectedUploadDetails}" FontFamily="Consolas, Menlo, monospace" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Classes="card">
+                            <StackPanel Spacing="12">
+                                <DockPanel LastChildFill="True">
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="8">
+                                        <Button Content="Scan" Click="RefreshCleanup_Click"/>
+                                        <Button Content="Delete All Verified" IsEnabled="{Binding CanDeleteAllVerified}" Click="DeleteAllVerifiedCleanup_Click"/>
+                                    </StackPanel>
+                                    <TextBlock Text="Cleanup" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <TextBlock Text="Folders of originals left by earlier versions (in each destination's _processed folder) and roll folders kept because they held files that weren't uploaded. A folder is verified when its roll's finished files are all on the destination; only verified folders can be deleted." TextWrapping="Wrap" Foreground="#475569"/>
+                                <TextBlock Text="{Binding CleanupStatus}" TextWrapping="Wrap" Foreground="#64748B"/>
+                                <Grid ColumnDefinitions="*,140,160,110" Margin="12,4,4,0">
+                                    <TextBlock Grid.Column="0" Text="Folder" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Column="1" Text="Kind" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Column="2" Text="Size" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Column="3" Text="Status" FontWeight="SemiBold"/>
+                                </Grid>
+                                <ListBox ItemsSource="{Binding CleanupEntries}"
+                                         SelectedItem="{Binding SelectedCleanup, Mode=TwoWay}"
+                                         MinHeight="160" MaxHeight="320">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Margin="4,6" Spacing="2">
+                                                <Grid ColumnDefinitions="*,140,160,110">
+                                                    <TextBlock Grid.Column="0" Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                                    <TextBlock Grid.Column="1" Text="{Binding KindLabel}"/>
+                                                    <TextBlock Grid.Column="2" Text="{Binding SizeLabel}"/>
+                                                    <TextBlock Grid.Column="3" Text="{Binding VerifiedLabel}"/>
+                                                </Grid>
+                                                <TextBlock Text="{Binding Reason}" FontSize="12" Foreground="#64748B" TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button Content="Open Folder" IsEnabled="{Binding HasSelectedCleanup}" Click="OpenCleanup_Click"/>
+                                    <Button Content="Delete Selected" IsEnabled="{Binding CanDeleteSelectedCleanup}" Click="DeleteSelectedCleanup_Click"/>
+                                </StackPanel>
                             </StackPanel>
                         </Border>
                     </StackPanel>

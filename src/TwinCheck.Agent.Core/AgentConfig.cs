@@ -9,6 +9,25 @@ public sealed record AgentConfig
     public string[] AllowedDestinationRoots { get; init; } = [];
     public string? ActiveProfileId { get; init; }
     public ScannerProfile[] Profiles { get; init; } = [];
+
+    /// <summary>Local folder where rolls are processed before upload. Never a network share.</summary>
+    public string? StagingDir { get; init; }
+
+    public string ResolveStagingRoot() =>
+        Path.GetFullPath(string.IsNullOrWhiteSpace(StagingDir) ? DefaultStagingRoot : StagingDir);
+
+    public static string DefaultStagingRoot
+    {
+        get
+        {
+            // Under the state folder when the installer sets one (NixOS: ~/.local/state); otherwise the
+            // non-roaming per-user data folder, so Windows profiles never sync staged scans.
+            var stateDir = Environment.GetEnvironmentVariable(ScanOperationStore.StateDirectoryEnvironmentVariable);
+            return !string.IsNullOrWhiteSpace(stateDir)
+                ? Path.Combine(Path.GetFullPath(stateDir), "staging")
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TwinCheck", "ScanAgent", "staging");
+        }
+    }
 }
 
 public sealed record ScannerProfile

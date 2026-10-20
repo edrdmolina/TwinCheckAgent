@@ -24,6 +24,8 @@ public sealed class ScanOperationStore
     public const string StateDirectoryEnvironmentVariable = "TWINCHECK_AGENT_STATE_DIR";
     public const int HistoryRetentionDays = 30;
     public const int KeyRetentionDays = 180;
+    // 2: upload queue (upload_rolls, upload_files) and agent_settings. An older agent refuses this database.
+    private const int SchemaVersion = 2;
 
     // Finished jobs and retained keys are read from SQLite on demand, never cached.
     private readonly Dictionary<string, ScanOperationState> active = new(StringComparer.Ordinal);
@@ -251,6 +253,12 @@ public sealed class ScanOperationStore
             command.CommandText = "DELETE FROM job_keys WHERE completed_at < $cutoff AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.idempotency_key=job_keys.idempotency_key)";
             Add(command, "$cutoff", Date(timestamp.AddDays(-KeyRetentionDays)));
             var keysDeleted = command.ExecuteNonQuery();
+            command.Parameters.Clear();
+            command.CommandText = "DELETE FROM upload_rolls WHERE status IN ($done, $failed) AND completed_at < $cutoff";
+            Add(command, "$done", UploadStatuses.Done);
+            Add(command, "$failed", UploadStatuses.Failed);
+            Add(command, "$cutoff", Date(timestamp.AddDays(-HistoryRetentionDays)));
+            command.ExecuteNonQuery();
             transaction.Commit();
             using var vacuum = connection.CreateCommand();
             // Reclaim a bounded number of free pages each pass, without a blocking full VACUUM.
@@ -268,7 +276,7 @@ public sealed class ScanOperationStore
         using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA user_version";
         var version = (long)command.ExecuteScalar()!;
-        if (version > 1) throw new InvalidOperationException($"Job database schema {version} is newer than this agent supports.");
+        if (version > SchemaVersion) throw new InvalidOperationException($"Job database schema {version} is newer than this agent supports.");
         command.CommandText = """
             PRAGMA auto_vacuum=INCREMENTAL;
             PRAGMA journal_mode=WAL;
@@ -309,9 +317,306 @@ public sealed class ScanOperationStore
             );
             CREATE INDEX IF NOT EXISTS ix_jobs_recent ON jobs(is_terminal, created_at DESC);
             CREATE INDEX IF NOT EXISTS ix_jobs_cleanup ON jobs(is_terminal, completed_at);
-            PRAGMA user_version=1;
+            CREATE TABLE IF NOT EXISTS upload_rolls (
+                idempotency_key TEXT PRIMARY KEY,
+                profile_id TEXT NOT NULL,
+                order_number TEXT NOT NULL,
+                roll_number TEXT NOT NULL,
+                source_dir TEXT NOT NULL,
+                source_archive_dir TEXT NOT NULL,
+                staging_dir TEXT NOT NULL,
+                final_dir TEXT NOT NULL,
+                destination_root TEXT NOT NULL,
+                manifest_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempts INTEGER NOT NULL,
+                last_error TEXT,
+                next_attempt_at TEXT,
+                queued_at TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT,
+                manifest_written INTEGER NOT NULL,
+                cleanup_warning TEXT
+            );
+            CREATE INDEX IF NOT EXISTS ix_upload_rolls_queue ON upload_rolls(status, queued_at);
+            CREATE TABLE IF NOT EXISTS upload_files (
+                idempotency_key TEXT NOT NULL REFERENCES upload_rolls(idempotency_key) ON DELETE CASCADE,
+                seq INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                source_path TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                staged_path TEXT NOT NULL,
+                planned_path TEXT NOT NULL,
+                source_size INTEGER NOT NULL,
+                source_sha256 TEXT,
+                size INTEGER NOT NULL,
+                sha256 TEXT NOT NULL,
+                conversion TEXT,
+                state TEXT NOT NULL,
+                destination_path TEXT,
+                outcome TEXT,
+                message TEXT,
+                PRIMARY KEY (idempotency_key, seq)
+            );
+            CREATE TABLE IF NOT EXISTS agent_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            PRAGMA user_version=2;
             """;
         command.ExecuteNonQuery();
+    }
+
+    // Upload queue. Rows live beside the job history so a restart resumes every roll where it stopped.
+
+    public void SaveUpload(UploadRoll roll)
+    {
+        lock (gate)
+        {
+            using var connection = Open();
+            using var transaction = connection.BeginTransaction();
+            using (var delete = connection.CreateCommand())
+            {
+                delete.Transaction = transaction;
+                delete.CommandText = "DELETE FROM upload_rolls WHERE idempotency_key=$key";
+                Add(delete, "$key", roll.IdempotencyKey);
+                delete.ExecuteNonQuery();
+            }
+            using (var insert = connection.CreateCommand())
+            {
+                insert.Transaction = transaction;
+                insert.CommandText = """
+                    INSERT INTO upload_rolls (
+                        idempotency_key, profile_id, order_number, roll_number, source_dir, source_archive_dir,
+                        staging_dir, final_dir, destination_root, manifest_json, status, attempts, last_error,
+                        next_attempt_at, queued_at, started_at, completed_at, manifest_written, cleanup_warning
+                    ) VALUES (
+                        $key, $profile, $order, $roll, $source, $archive, $staging, $final, $destination, $manifest,
+                        $status, $attempts, $error, $next, $queued, $started, $completed, $written, $warning
+                    )
+                    """;
+                AddUploadRoll(insert, roll);
+                Add(insert, "$profile", roll.ProfileId);
+                Add(insert, "$order", roll.OrderNumber);
+                Add(insert, "$roll", roll.RollNumber);
+                Add(insert, "$source", roll.SourceDir);
+                Add(insert, "$archive", roll.SourceArchiveDir);
+                Add(insert, "$staging", roll.StagingDir);
+                Add(insert, "$final", roll.FinalDir);
+                Add(insert, "$destination", roll.DestinationRoot);
+                Add(insert, "$manifest", Serialize(roll.Manifest with { Files = [] }));
+                Add(insert, "$queued", Date(roll.QueuedAt));
+                insert.ExecuteNonQuery();
+            }
+            foreach (var file in roll.Files)
+            {
+                using var insertFile = connection.CreateCommand();
+                insertFile.Transaction = transaction;
+                insertFile.CommandText = """
+                    INSERT INTO upload_files (
+                        idempotency_key, seq, kind, source_path, file_name, staged_path, planned_path, source_size,
+                        source_sha256, size, sha256, conversion, state, destination_path, outcome, message
+                    ) VALUES (
+                        $key, $seq, $kind, $sourcePath, $fileName, $staged, $planned, $sourceSize,
+                        $sourceSha, $size, $sha, $conversion, $state, $destinationPath, $outcome, $message
+                    )
+                    """;
+                Add(insertFile, "$key", roll.IdempotencyKey);
+                Add(insertFile, "$kind", file.Kind.ToString());
+                Add(insertFile, "$sourcePath", file.SourcePath);
+                Add(insertFile, "$fileName", file.FileName);
+                Add(insertFile, "$staged", file.StagedPath);
+                Add(insertFile, "$planned", file.PlannedPath);
+                Add(insertFile, "$sourceSize", file.SourceSize);
+                Add(insertFile, "$sourceSha", file.SourceSha256);
+                Add(insertFile, "$size", file.Size);
+                Add(insertFile, "$sha", file.Sha256);
+                Add(insertFile, "$conversion", file.Conversion);
+                AddUploadFileState(insertFile, file);
+                insertFile.ExecuteNonQuery();
+            }
+            transaction.Commit();
+        }
+    }
+
+    /// <summary>Saves the roll's status fields. Its file list is saved with <see cref="UpdateUploadFile"/>.</summary>
+    public void UpdateUploadRoll(UploadRoll roll)
+    {
+        lock (gate)
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE upload_rolls SET status=$status, attempts=$attempts, last_error=$error, next_attempt_at=$next,
+                    started_at=$started, completed_at=$completed, manifest_written=$written, cleanup_warning=$warning
+                WHERE idempotency_key=$key
+                """;
+            AddUploadRoll(command, roll);
+            if (command.ExecuteNonQuery() != 1) throw new KeyNotFoundException($"Unknown upload '{roll.IdempotencyKey}'.");
+        }
+    }
+
+    public void UpdateUploadFile(string idempotencyKey, UploadFile file)
+    {
+        lock (gate)
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE upload_files SET state=$state, destination_path=$destinationPath, outcome=$outcome, message=$message
+                WHERE idempotency_key=$key AND seq=$seq
+                """;
+            Add(command, "$key", idempotencyKey);
+            AddUploadFileState(command, file);
+            if (command.ExecuteNonQuery() != 1) throw new KeyNotFoundException($"Unknown upload file {file.Sequence} for '{idempotencyKey}'.");
+        }
+    }
+
+    public UploadRoll? GetUpload(string idempotencyKey)
+    {
+        lock (gate)
+        {
+            using var connection = Open();
+            return ReadUploads(connection, "WHERE idempotency_key=$key", command => Add(command, "$key", idempotencyKey)).SingleOrDefault();
+        }
+    }
+
+    /// <summary>Every unfinished roll in queue order, then finished rolls newest first.</summary>
+    public IReadOnlyList<UploadRoll> ListUploads(int finishedLimit = 100)
+    {
+        lock (gate)
+        {
+            using var connection = Open();
+            var unfinished = ReadUploads(connection, "WHERE status NOT IN ($done, $failed) ORDER BY queued_at", AddFinishedStatuses);
+            var finished = ReadUploads(connection, "WHERE status IN ($done, $failed) ORDER BY completed_at DESC LIMIT $limit", command =>
+            {
+                AddFinishedStatuses(command);
+                Add(command, "$limit", Math.Clamp(finishedLimit, 0, 500));
+            });
+            return [.. unfinished, .. finished];
+        }
+    }
+
+    public void DeleteUpload(string idempotencyKey)
+    {
+        lock (gate)
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM upload_rolls WHERE idempotency_key=$key";
+            Add(command, "$key", idempotencyKey);
+            command.ExecuteNonQuery();
+        }
+    }
+
+    public bool UploadsPaused
+    {
+        get
+        {
+            lock (gate)
+            {
+                using var connection = Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "SELECT value FROM agent_settings WHERE key='uploads_paused'";
+                return command.ExecuteScalar() as string == "1";
+            }
+        }
+        set
+        {
+            lock (gate)
+            {
+                using var connection = Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "INSERT INTO agent_settings VALUES ('uploads_paused', $value) ON CONFLICT(key) DO UPDATE SET value=excluded.value";
+                Add(command, "$value", value ? "1" : "0");
+                command.ExecuteNonQuery();
+            }
+        }
+    }
+
+    private List<UploadRoll> ReadUploads(SqliteConnection connection, string where, Action<SqliteCommand> bind)
+    {
+        var rolls = new List<UploadRoll>();
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = $"SELECT * FROM upload_rolls {where}";
+            bind(command);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                string? Read(string name) => String(reader, reader.GetOrdinal(name));
+                DateTimeOffset? ReadDate(string name) => Read(name) is { } value ? ParseDate(value) : null;
+                rolls.Add(new UploadRoll
+                {
+                    IdempotencyKey = Read("idempotency_key")!, ProfileId = Read("profile_id")!,
+                    OrderNumber = Read("order_number")!, RollNumber = Read("roll_number")!,
+                    SourceDir = Read("source_dir")!, SourceArchiveDir = Read("source_archive_dir")!,
+                    StagingDir = Read("staging_dir")!, FinalDir = Read("final_dir")!, DestinationRoot = Read("destination_root")!,
+                    Manifest = JsonSerializer.Deserialize<OperationManifest>(Read("manifest_json")!, jsonOptions)!,
+                    Status = Read("status")!, Attempts = reader.GetInt32(reader.GetOrdinal("attempts")),
+                    LastError = Read("last_error"), NextAttemptAt = ReadDate("next_attempt_at"),
+                    QueuedAt = ReadDate("queued_at")!.Value, StartedAt = ReadDate("started_at"), CompletedAt = ReadDate("completed_at"),
+                    ManifestWritten = reader.GetInt32(reader.GetOrdinal("manifest_written")) == 1,
+                    CleanupWarning = Read("cleanup_warning")
+                });
+            }
+        }
+
+        for (var index = 0; index < rolls.Count; index++)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT * FROM upload_files WHERE idempotency_key=$key ORDER BY seq";
+            Add(command, "$key", rolls[index].IdempotencyKey);
+            using var reader = command.ExecuteReader();
+            var files = new List<UploadFile>();
+            while (reader.Read())
+            {
+                string? Read(string name) => String(reader, reader.GetOrdinal(name));
+                files.Add(new UploadFile
+                {
+                    Sequence = reader.GetInt32(reader.GetOrdinal("seq")),
+                    Kind = Enum.Parse<ScanFileKind>(Read("kind")!),
+                    SourcePath = Read("source_path")!, FileName = Read("file_name")!,
+                    StagedPath = Read("staged_path")!, PlannedPath = Read("planned_path")!,
+                    SourceSize = reader.GetInt64(reader.GetOrdinal("source_size")), SourceSha256 = Read("source_sha256"),
+                    Size = reader.GetInt64(reader.GetOrdinal("size")), Sha256 = Read("sha256")!,
+                    Conversion = Read("conversion"), State = Read("state")!, DestinationPath = Read("destination_path"),
+                    Outcome = Read("outcome") is { } outcome ? Enum.Parse<ScanFileOutcome>(outcome) : null,
+                    Message = Read("message")
+                });
+            }
+            rolls[index] = rolls[index] with { Files = files };
+        }
+
+        return rolls;
+    }
+
+    private static void AddUploadRoll(SqliteCommand command, UploadRoll roll)
+    {
+        Add(command, "$key", roll.IdempotencyKey);
+        Add(command, "$status", roll.Status);
+        Add(command, "$attempts", roll.Attempts);
+        Add(command, "$error", roll.LastError);
+        Add(command, "$next", Date(roll.NextAttemptAt));
+        Add(command, "$started", Date(roll.StartedAt));
+        Add(command, "$completed", Date(roll.CompletedAt));
+        Add(command, "$written", roll.ManifestWritten ? 1 : 0);
+        Add(command, "$warning", roll.CleanupWarning);
+    }
+
+    private static void AddUploadFileState(SqliteCommand command, UploadFile file)
+    {
+        Add(command, "$seq", file.Sequence);
+        Add(command, "$state", file.State);
+        Add(command, "$destinationPath", file.DestinationPath);
+        Add(command, "$outcome", file.Outcome?.ToString());
+        Add(command, "$message", file.Message);
+    }
+
+    private static void AddFinishedStatuses(SqliteCommand command)
+    {
+        Add(command, "$done", UploadStatuses.Done);
+        Add(command, "$failed", UploadStatuses.Failed);
     }
 
     private void ImportLegacyJobs()

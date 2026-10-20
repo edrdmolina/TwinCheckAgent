@@ -101,8 +101,11 @@ def run(api, root, exiftool):
         result = body["operation"]["result"]
         file = result["manifest"]["files"][0]
         delivered = Path(file["destinationPath"])
-        archive = Path(result["manifest"]["sourceArchiveDir"]) / "frame001.png"
-        assert archive.read_bytes() == original_bytes
+        # The roll was processed in local staging, uploaded, verified, and then its originals were deleted.
+        processed = Path(result["manifest"]["sourceArchiveDir"])
+        assert processed.name == "_processed-B123-1" and processed.parent == source.parent, processed
+        assert not source.exists() and not processed.exists()
+        assert not any((root / "state" / "staging").iterdir())
         assert hashlib.sha256(delivered.read_bytes()).hexdigest() == file["sha256"]
         assert file["sourceSha256"] == original_hash and file["sha256"] != original_hash
         code, retry = call("POST", "/api/scan/operations", reverse_keys(request))
@@ -112,6 +115,9 @@ def run(api, root, exiftool):
         assert code == 409 and conflict["code"] == "idempotency-conflict", conflict
         code, jobs = call("GET", "/api/scan/operations")
         assert code == 200 and len(jobs["operations"]) == 1, jobs
+        assert jobs["localProcessingActive"] == 0 and jobs["uploadsPending"] == 0, jobs
+        code, uploads = call("GET", "/api/scan/uploads")
+        assert code == 200 and [row["status"] for row in uploads["uploads"]] == ["done"], uploads
 
         tags = json.loads(subprocess.check_output([
             str(exiftool), "-j", "-struct", "-G1", "-charset", "exif=UTF8", "-charset", "filename=UTF8",
@@ -126,12 +132,11 @@ def run(api, root, exiftool):
         (root / "verification.json").write_text(json.dumps(dict(
             source="Generated PNG; processed through a real Scanner Agent HTTP job",
             capability="scan-metadata-v1", namespace="urn:twincheck:scan-metadata:1.0", prefix="twincheck",
-            archivedOriginal=str(archive), delivered=str(delivered), originalSha256=original_hash,
-            archivedSha256=hashlib.sha256(archive.read_bytes()).hexdigest(), deliveredSha256=file["sha256"],
-            archivedBytesIdentical=True, deliveredChecksumVerified=True,
+            delivered=str(delivered), originalSha256=original_hash, sourceSha256=file["sourceSha256"],
+            deliveredSha256=file["sha256"], deliveredChecksumVerified=True, originalDeletedAfterUpload=True,
             reorderedRetryAccepted=True, changedMetadataConflict=True, unknownFieldsAccepted=True), indent=2) + "\n")
         print(json.dumps(tags, ensure_ascii=False, indent=2))
-        print("Passed: real scan pipeline, Unicode metadata, local scanner identity, retries/conflicts, and untouched archived original.")
+        print("Passed: real scan pipeline, Unicode metadata, local scanner identity, retries/conflicts, upload queue, and original cleanup.")
     finally:
         if process.poll() is None:
             process.terminate()

@@ -130,7 +130,8 @@ Usage: update.sh [options]
 
 Downloads the latest release from GitHub, verifies its SHA-256 checksum, and reinstalls
 with the same install folder and agent URL. Profiles, the API key, logs, and job history
-are kept. Refuses to run while scan jobs are active.
+are kept. Refuses to run while a roll is being processed on local disk; queued uploads
+resume after the update.
 
 Options:
   --check              Only report whether an update is available.
@@ -178,18 +179,30 @@ installed_agent_url() {
     printf '%s' "${url:-https://localhost:3625}"
 }
 
+json_number() {
+    { printf '%s' "$1" | grep -oE "\"$2\"[[:space:]]*:[[:space:]]*[0-9]+" | head -n1 | grep -oE '[0-9]+$'; } || true
+}
+
 ensure_no_running_jobs() {
-    local agent_url="${1%/}" config_path api_key response active
+    local agent_url="${1%/}" config_path api_key response active uploads
     config_path="${XDG_CONFIG_HOME:-$HOME/.config}/TwinCheck/ScanAgent/agent-config.json"
     api_key="$( [[ -f "$config_path" ]] && json_string "$(cat "$config_path")" apiKey || true)"
     if ! response="$(curl_cmd -fsSk --max-time 5 -H "X-Api-Key: $api_key" "$agent_url/api/scan/operations?limit=1" 2>/dev/null)"; then
         echo "The agent is not answering at $agent_url, so running jobs can't be checked. Continuing."
         return
     fi
-    active="$(printf '%s' "$response" | grep -cE '"status"[[:space:]]*:[[:space:]]*"(queued|processing)"' || true)"
+    active="$(json_number "$response" localProcessingActive)"
+    if [[ -z "$active" ]]; then
+        # Agents before the upload queue: any queued or processing job blocks the update.
+        active="$(printf '%s' "$response" | grep -cE '"status"[[:space:]]*:[[:space:]]*"(queued|processing)"' || true)"
+    fi
     if [[ "$active" -gt 0 ]]; then
-        echo "$active scan job(s) are still running. Let them finish, then run update.sh again. Nothing was changed." >&2
+        echo "$active roll(s) are being processed. Let them finish, then run update.sh again. Nothing was changed." >&2
         exit 1
+    fi
+    uploads="$(json_number "$response" uploadsPending)"
+    if [[ "${uploads:-0}" -gt 0 ]]; then
+        echo "$uploads queued upload(s) will resume after the update."
     fi
 }
 

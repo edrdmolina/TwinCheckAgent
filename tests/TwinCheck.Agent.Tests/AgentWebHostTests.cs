@@ -73,6 +73,54 @@ public sealed class AgentWebHostTests : IDisposable
         await app.StopAsync();
     }
 
+    [Fact]
+    public async Task ServesUploadQueueAndCleanupEndpoints()
+    {
+        LocalAgentConfigStore.CreateIfMissing();
+        var apiKey = LocalAgentConfigStore.LoadOrDefault(new AgentConfig()).ApiKey;
+        using var certificate = CreateLocalhostCertificate();
+        var port = FreePort();
+        await using var app = AgentWebHost.Create([], new AgentHostOptions { Certificate = certificate, Port = port, ContentRootPath = root });
+        await app.StartAsync();
+        using var handler = new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback = (_, served, _, _) => served?.Thumbprint == certificate.Thumbprint
+        };
+        using var client = new HttpClient(handler) { BaseAddress = new Uri($"https://localhost:{port}") };
+        client.DefaultRequestHeaders.Add("X-Api-Key", apiKey);
+
+        async Task<(HttpStatusCode Status, JsonElement Body)> Call(HttpMethod method, string path, string? json = null)
+        {
+            using var request = new HttpRequestMessage(method, path);
+            if (json is not null) request.Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+            using var response = await client.SendAsync(request);
+            return (response.StatusCode, JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.Clone());
+        }
+
+        var (status, operations) = await Call(HttpMethod.Get, "/api/scan/operations");
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal(0, operations.GetProperty("localProcessingActive").GetInt32());
+        Assert.Equal(0, operations.GetProperty("uploadsPending").GetInt32());
+
+        var (_, uploads) = await Call(HttpMethod.Get, "/api/scan/uploads");
+        Assert.False(uploads.GetProperty("paused").GetBoolean());
+        Assert.Equal(0, uploads.GetProperty("uploads").GetArrayLength());
+        Assert.True((await Call(HttpMethod.Post, "/api/scan/uploads/pause")).Body.GetProperty("paused").GetBoolean());
+        Assert.True((await Call(HttpMethod.Get, "/api/scan/uploads")).Body.GetProperty("paused").GetBoolean());
+        Assert.False((await Call(HttpMethod.Post, "/api/scan/uploads/resume")).Body.GetProperty("paused").GetBoolean());
+        Assert.Equal(HttpStatusCode.Conflict, (await Call(HttpMethod.Post, "/api/scan/uploads/unknown/retry")).Status);
+
+        var (cleanupStatus, cleanup) = await Call(HttpMethod.Get, "/api/scan/cleanup");
+        Assert.Equal(HttpStatusCode.OK, cleanupStatus);
+        Assert.Equal(0, cleanup.GetProperty("entries").GetArrayLength());
+        var (_, deleted) = await Call(HttpMethod.Post, "/api/scan/cleanup/delete", JsonSerializer.Serialize(new { paths = new[] { root } }));
+        Assert.Equal(0, deleted.GetProperty("deleted").GetArrayLength());
+        Assert.Equal(1, deleted.GetProperty("skipped").GetArrayLength());
+        Assert.True(Directory.Exists(root));
+
+        await app.StopAsync();
+    }
+
     public void Dispose()
     {
         foreach (var (name, value) in original) Environment.SetEnvironmentVariable(name, value);

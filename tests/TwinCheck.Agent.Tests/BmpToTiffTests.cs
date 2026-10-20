@@ -9,7 +9,7 @@ namespace TwinCheck.Agent.Tests;
 public sealed class BmpToTiffTests
 {
     [Fact]
-    public void EnabledProfileConvertsBmpToVerifiedUncompressedTiffAndArchivesOriginal()
+    public void EnabledProfileConvertsBmpToVerifiedUncompressedTiffAndDeletesOriginal()
     {
         using var workspace = new ImageWorkspace();
         var sourceDir = workspace.CreateSource("roll-a");
@@ -17,18 +17,19 @@ public sealed class BmpToTiffTests
         var sourcePath = workspace.WriteImage(sourceDir, "scan001.bmp", MagickFormat.Bmp, MagickColors.Crimson);
         var sourceHash = FileSystemSafety.ComputeSha256(sourcePath);
         var sourceSize = new FileInfo(sourcePath).Length;
+        var reference = workspace.KeepReference(sourcePath);
         var processor = workspace.CreateProcessor(sourceDir, destinationRoot, convertBmp: true);
 
         var result = processor.Process(workspace.CreateRequest());
 
         var outputPath = Path.Combine(workspace.FinalDir(destinationRoot), "B31009-1-1.tif");
-        var archivedBmp = Path.Combine(result.Manifest.SourceArchiveDir!, "scan001.bmp");
         Assert.True(File.Exists(outputPath));
         Assert.False(File.Exists(Path.ChangeExtension(outputPath, ".bmp")));
-        Assert.True(File.Exists(archivedBmp));
-        Assert.Equal(sourceHash, FileSystemSafety.ComputeSha256(archivedBmp));
+        // The original BMP is deleted once the TIFF is verified on the destination.
+        Assert.False(Directory.Exists(sourceDir));
+        Assert.False(Directory.Exists(result.Manifest.SourceArchiveDir));
 
-        using var original = new MagickImage(archivedBmp);
+        using var original = new MagickImage(reference);
         using var converted = new MagickImage(outputPath);
         Assert.Equal(MagickFormat.Tiff, converted.Format);
         Assert.Equal(CompressionMethod.NoCompression, converted.Compression);
@@ -137,8 +138,9 @@ public sealed class BmpToTiffTests
         Assert.True(file.Size > 0);
         Assert.True(Directory.Exists(sourceDir));
         Assert.False(Directory.Exists(workspace.FinalDir(destinationRoot)));
-        Assert.False(Directory.Exists(Path.Combine(destinationRoot, "_processed")));
+        Assert.Empty(Directory.EnumerateDirectories(Path.GetDirectoryName(sourceDir)!, "_processed-*"));
         Assert.False(Directory.Exists(Path.Combine(destinationRoot, ".twincheck-staging")));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(workspace.StagingRoot));
     }
 
     [Fact]
@@ -155,8 +157,9 @@ public sealed class BmpToTiffTests
         Assert.True(Directory.Exists(sourceDir));
         Assert.True(File.Exists(Path.Combine(sourceDir, "scan001.bmp")));
         Assert.Empty(Directory.EnumerateFiles(destinationRoot, "*.tif", SearchOption.AllDirectories));
-        Assert.False(Directory.Exists(Path.Combine(destinationRoot, "_processed")));
+        Assert.Empty(Directory.EnumerateDirectories(Path.GetDirectoryName(sourceDir)!, "_processed-*"));
         Assert.False(Directory.Exists(Path.Combine(destinationRoot, ".twincheck-staging")));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(workspace.StagingRoot));
         var manifestPath = Path.Combine(workspace.FinalDir(destinationRoot), "manifest-op-1.json");
         var failedManifest = new OperationStore().ReadManifest(manifestPath);
         Assert.Contains(failedManifest.Files, file => file.Outcome == ScanFileOutcome.Failed);
@@ -202,7 +205,7 @@ public sealed class BmpToTiffTests
     }
 
     [Fact]
-    public void RollbackKeepsConvertedArtifactTiffExtensionBesideOriginalBmp()
+    public void RollbackMovesConvertedTiffIntoRolledBackFolder()
     {
         using var workspace = new ImageWorkspace();
         var sourceDir = workspace.CreateSource("roll-a");
@@ -221,9 +224,12 @@ public sealed class BmpToTiffTests
         });
 
         Assert.True(rollback.Ok);
-        Assert.True(File.Exists(Path.Combine(rollback.SourceArchiveDir, "scan001.bmp")));
+        // Rolled-back files go to the destination's _rolledback folder, never back into a watch folder.
+        Assert.Equal(Path.Combine(destinationRoot, "_rolledback"), Path.GetDirectoryName(rollback.SourceArchiveDir));
+        Assert.StartsWith("B31009-1-", Path.GetFileName(rollback.SourceArchiveDir));
         Assert.True(File.Exists(Path.Combine(rollback.SourceArchiveDir, "B31009-1-1.tif")));
         Assert.False(File.Exists(Path.Combine(result.Manifest.FinalDir, "B31009-1-1.tif")));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(sourceDir)!));
     }
 
     [Fact]
@@ -304,11 +310,22 @@ public sealed class BmpToTiffTests
 
         public ImageWorkspace() => Directory.CreateDirectory(Root);
 
+        public string StagingRoot => Path.Combine(Root, "staging");
+
+        /// <summary>Creates a roll folder inside its own watch folder; profiles watch the parent.</summary>
         public string CreateSource(string name)
         {
-            var path = Path.Combine(Root, "sources", name);
+            var path = Path.Combine(Root, "sources", $"watch-{name}", name);
             Directory.CreateDirectory(path);
             return path;
+        }
+
+        /// <summary>Copies an original before processing, since processing deletes it once uploaded.</summary>
+        public string KeepReference(string path)
+        {
+            var reference = Path.Combine(Root, "reference-" + Path.GetFileName(path));
+            File.Copy(path, reference);
+            return reference;
         }
 
         public string CreateDestination()
@@ -338,7 +355,7 @@ public sealed class BmpToTiffTests
             {
                 Id = "dev-profile",
                 Name = "Dev Profile",
-                SourceDir = sourceDir,
+                SourceDir = Path.GetDirectoryName(sourceDir)!,
                 DestinationDir = destinationRoot,
                 Options = new ScanOptions { BmpToTiff = convertBmp }
             };
@@ -350,7 +367,8 @@ public sealed class BmpToTiffTests
                 AllowedSourceRoots = [Path.Combine(Root, "sources")],
                 AllowedDestinationRoots = [destinationRoot],
                 ActiveProfileId = "dev-profile",
-                Profiles = [CreateProfile(sourceDir, destinationRoot, convertBmp)]
+                Profiles = [CreateProfile(sourceDir, destinationRoot, convertBmp)],
+                StagingDir = StagingRoot
             };
 
         public ScanProcessor CreateProcessor(string sourceDir, string destinationRoot, bool convertBmp) =>

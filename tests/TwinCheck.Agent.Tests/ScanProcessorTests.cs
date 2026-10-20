@@ -8,12 +8,12 @@ public sealed class ScanProcessorTests
     public void DryRunPlansMappingsWithoutMovingSource()
     {
         using var workspace = new TempWorkspace();
-        var sourceDir = workspace.CreateSource("roll-a");
+        var sourceDir = workspace.CreateRoll("roll-a");
         var destinationRoot = workspace.CreateDestination();
         workspace.WriteFile(sourceDir, "scan001.jpg", "image-one");
         workspace.WriteFile(sourceDir, "notes.txt", "operator note");
 
-        var processor = workspace.CreateProcessor(sourceDir, destinationRoot);
+        var processor = workspace.CreateProcessor(workspace.WatchRoot, destinationRoot);
         var result = processor.Process(workspace.CreateRequest(dryRun: true));
 
         Assert.True(result.Ok);
@@ -26,42 +26,48 @@ public sealed class ScanProcessorTests
     }
 
     [Fact]
-    public void ProcessCopiesVerifiesReviewsAndArchivesSource()
+    public void ProcessStagesLocallyUploadsVerifiesAndDeletesOriginals()
     {
         using var workspace = new TempWorkspace();
-        var sourceDir = workspace.CreateSource("roll-a");
+        var sourceDir = workspace.CreateRoll("roll-a");
         var destinationRoot = workspace.CreateDestination();
         workspace.WriteFile(sourceDir, "scan001.jpg", "image-one");
         workspace.WriteFile(sourceDir, "metadata.json", "{}");
+        workspace.WriteFile(sourceDir, FileSystemSafety.ExportSentinelFileName, "{}");
 
-        var processor = workspace.CreateProcessor(sourceDir, destinationRoot);
+        var processor = workspace.CreateProcessor(workspace.WatchRoot, destinationRoot);
         var result = processor.Process(workspace.CreateRequest());
 
         var finalImage = Path.Combine(workspace.FinalDir(destinationRoot), "B31009-1-1.jpg");
         var reviewFile = Path.Combine(destinationRoot, "_review", "op-1", "metadata.json");
-        var processedRoot = Path.Combine(destinationRoot, "_processed");
 
         Assert.True(result.Ok);
         Assert.True(File.Exists(finalImage));
         Assert.Equal("image-one", File.ReadAllText(finalImage));
         Assert.True(File.Exists(reviewFile));
-        Assert.False(Directory.Exists(sourceDir));
-        Assert.Contains(Directory.EnumerateDirectories(processedRoot), path => path.Contains("roll-a-op-1"));
         Assert.True(File.Exists(Path.Combine(workspace.FinalDir(destinationRoot), "manifest-op-1.json")));
+        // Originals and the local copy are gone once the upload is verified; nothing was staged on the destination.
+        Assert.False(Directory.Exists(sourceDir));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(workspace.WatchRoot));
+        Assert.Equal(Path.Combine(workspace.WatchRoot, "_processed-B31009-1"), result.Manifest.SourceArchiveDir);
+        Assert.False(Directory.Exists(Path.Combine(destinationRoot, ".twincheck-staging")));
+        Assert.False(Directory.Exists(Path.Combine(destinationRoot, "_processed")));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(workspace.StagingRoot));
+        Assert.Empty(Directory.EnumerateFiles(destinationRoot, "*.twincheck-partial", SearchOption.AllDirectories));
     }
 
     [Fact]
     public void DuplicateNameWithDifferentBytesWritesVersionedFile()
     {
         using var workspace = new TempWorkspace();
-        var sourceDir = workspace.CreateSource("roll-a");
+        var sourceDir = workspace.CreateRoll("roll-a");
         var destinationRoot = workspace.CreateDestination();
         var finalDir = workspace.FinalDir(destinationRoot);
         Directory.CreateDirectory(finalDir);
         File.WriteAllText(Path.Combine(finalDir, "B31009-1-1.jpg"), "existing-different-image");
         workspace.WriteFile(sourceDir, "scan001.jpg", "new-image");
 
-        var processor = workspace.CreateProcessor(sourceDir, destinationRoot);
+        var processor = workspace.CreateProcessor(workspace.WatchRoot, destinationRoot);
         var result = processor.Process(workspace.CreateRequest());
 
         Assert.Single(result.Conflicts);
@@ -74,14 +80,14 @@ public sealed class ScanProcessorTests
     public void DuplicateNameWithIdenticalBytesIsIdempotentNoOp()
     {
         using var workspace = new TempWorkspace();
-        var sourceDir = workspace.CreateSource("roll-a");
+        var sourceDir = workspace.CreateRoll("roll-a");
         var destinationRoot = workspace.CreateDestination();
         var finalDir = workspace.FinalDir(destinationRoot);
         Directory.CreateDirectory(finalDir);
         File.WriteAllText(Path.Combine(finalDir, "B31009-1-1.jpg"), "same-image");
         workspace.WriteFile(sourceDir, "scan001.jpg", "same-image");
 
-        var processor = workspace.CreateProcessor(sourceDir, destinationRoot);
+        var processor = workspace.CreateProcessor(workspace.WatchRoot, destinationRoot);
         var result = processor.Process(workspace.CreateRequest());
 
         Assert.Empty(result.Conflicts);
@@ -93,38 +99,41 @@ public sealed class ScanProcessorTests
     public void RetryWithSameIdempotencyKeyReturnsStoredManifest()
     {
         using var workspace = new TempWorkspace();
-        var sourceDir = workspace.CreateSource("roll-a");
+        var sourceDir = workspace.CreateRoll("roll-a");
         var destinationRoot = workspace.CreateDestination();
         workspace.WriteFile(sourceDir, "scan001.jpg", "image-one");
 
-        var processor = workspace.CreateProcessor(sourceDir, destinationRoot);
+        var processor = workspace.CreateProcessor(workspace.WatchRoot, destinationRoot);
         var first = processor.Process(workspace.CreateRequest());
-        var second = processor.Process(workspace.CreateRequest(sourceOverride: Path.Combine(destinationRoot, "_processed", "roll-a-op-1")));
+        var second = processor.Process(workspace.CreateRequest());
 
         Assert.Equal(first.Manifest.IdempotencyKey, second.Manifest.IdempotencyKey);
         Assert.Equal(first.Manifest.CompletedAt, second.Manifest.CompletedAt);
     }
 
     [Fact]
-    public void PendingManifestRecoversWhenSourceWasAlreadyArchived()
+    public void LegacyPendingManifestRecoversWhenSourceWasAlreadyArchived()
     {
         using var workspace = new TempWorkspace();
-        var sourceDir = workspace.CreateSource("roll-a");
+        var sourceDir = workspace.CreateRoll("roll-a");
         var destinationRoot = workspace.CreateDestination();
         workspace.WriteFile(sourceDir, "scan001.bmp", "large-image-placeholder");
         var operationStore = new OperationStore();
-        var processor = new ScanProcessor(workspace.CreateConfig(sourceDir, destinationRoot), operationStore);
+        var processor = new ScanProcessor(workspace.CreateConfig(workspace.WatchRoot, destinationRoot), operationStore);
 
+        // An older agent finalized the files and archived the source into _processed/, then stopped.
         var first = processor.Process(workspace.CreateRequest());
+        var legacyArchive = Path.Combine(destinationRoot, "_processed", "roll-a-op-1");
+        workspace.WriteFile(legacyArchive, "scan001.bmp", "large-image-placeholder");
         var manifestPath = Path.Combine(first.Manifest.FinalDir, "manifest-op-1.json");
-        operationStore.WriteManifestAt(manifestPath, first.Manifest with { CompletedAt = null });
+        operationStore.WriteManifestAt(manifestPath, first.Manifest with { CompletedAt = null, SourceArchiveDir = legacyArchive });
 
         var recovered = processor.Process(workspace.CreateRequest());
 
         Assert.True(recovered.Ok);
         Assert.NotNull(recovered.Manifest.CompletedAt);
         Assert.False(Directory.Exists(sourceDir));
-        Assert.True(Directory.Exists(recovered.Manifest.SourceArchiveDir));
+        Assert.True(Directory.Exists(legacyArchive));
     }
 
     [Fact]
@@ -178,10 +187,10 @@ public sealed class ScanProcessorTests
     public async Task AsyncOperationCompletesAndPersistsStatus()
     {
         using var workspace = new TempWorkspace();
-        var sourceDir = workspace.CreateSource("roll-a");
+        var sourceDir = workspace.CreateRoll("roll-a");
         var destinationRoot = workspace.CreateDestination();
         workspace.WriteFile(sourceDir, "scan001.bmp", "large-image-placeholder");
-        var configProvider = new AgentConfigProvider(workspace.CreateConfig(sourceDir, destinationRoot));
+        var configProvider = new AgentConfigProvider(workspace.CreateConfig(workspace.WatchRoot, destinationRoot));
         var logger = new LocalAgentLogger(Path.Combine(workspace.Root, "logs"));
         var stateDir = Path.Combine(workspace.Root, "state");
         var stateStore = new ScanOperationStore(stateDir, logger);
@@ -210,10 +219,10 @@ public sealed class ScanProcessorTests
     public async Task AsyncOperationRequeuesPersistedInProgressStateAfterRestart()
     {
         using var workspace = new TempWorkspace();
-        var sourceDir = workspace.CreateSource("roll-a");
+        var sourceDir = workspace.CreateRoll("roll-a");
         var destinationRoot = workspace.CreateDestination();
         workspace.WriteFile(sourceDir, "scan001.bmp", "large-image-placeholder");
-        var configProvider = new AgentConfigProvider(workspace.CreateConfig(sourceDir, destinationRoot));
+        var configProvider = new AgentConfigProvider(workspace.CreateConfig(workspace.WatchRoot, destinationRoot));
         var logger = new LocalAgentLogger(Path.Combine(workspace.Root, "logs"));
         var stateDir = Path.Combine(workspace.Root, "state");
         var firstStore = new ScanOperationStore(stateDir, logger);
@@ -284,9 +293,7 @@ public sealed class ScanProcessorTests
         Assert.False(Directory.Exists(rollFolder));
         Assert.True(File.Exists(Path.Combine(workspace.FinalDir(destinationRoot), "B31009-1-1.tif")));
         Assert.True(File.Exists(Path.Combine(workspace.FinalDir(destinationRoot), "B31009-1-2.tif")));
-        Assert.Contains(
-            Directory.EnumerateDirectories(Path.Combine(destinationRoot, "_processed")),
-            path => path.Contains("B31485-8-op-1"));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(sourceRoot));
         Assert.Equal(rollFolder, result.Manifest.SourceDir);
     }
 
@@ -308,7 +315,7 @@ public sealed class ScanProcessorTests
         Assert.True(Directory.Exists(sourceRoot));
         Assert.True(Directory.Exists(firstRollFolder));
         Assert.True(Directory.Exists(secondRollFolder));
-        Assert.False(Directory.Exists(Path.Combine(destinationRoot, "_processed")));
+        Assert.Empty(Directory.EnumerateDirectories(sourceRoot, "_processed-*"));
     }
 
     [Fact]
@@ -345,12 +352,12 @@ public sealed class ScanProcessorTests
     public void ProcessIgnoresExportSentinelFile()
     {
         using var workspace = new TempWorkspace();
-        var sourceDir = workspace.CreateSource("roll-a");
+        var sourceDir = workspace.CreateRoll("roll-a");
         var destinationRoot = workspace.CreateDestination();
         workspace.WriteFile(sourceDir, "scan001.jpg", "image-one");
         workspace.WriteFile(sourceDir, FileSystemSafety.ExportSentinelFileName, "{}");
 
-        var processor = workspace.CreateProcessor(sourceDir, destinationRoot);
+        var processor = workspace.CreateProcessor(workspace.WatchRoot, destinationRoot);
         var result = processor.Process(workspace.CreateRequest());
 
         Assert.True(result.Ok);
@@ -445,11 +452,11 @@ public sealed class ScanProcessorTests
     public void RescanWritesSiblingRescanFolder()
     {
         using var workspace = new TempWorkspace();
-        var sourceDir = workspace.CreateSource("roll-a");
+        var sourceDir = workspace.CreateRoll("roll-a");
         var destinationRoot = workspace.CreateDestination();
         workspace.WriteFile(sourceDir, "scan001.jpg", "image-one");
 
-        var processor = workspace.CreateProcessor(sourceDir, destinationRoot);
+        var processor = workspace.CreateProcessor(workspace.WatchRoot, destinationRoot);
         var result = processor.Process(workspace.CreateRequest(scanKind: ScanKinds.Rescan, rescanNumber: 2));
 
         Assert.Equal(Path.Combine(destinationRoot, ScannerFileSystem.GetWeekFolder(), "B31009", "B31009-1-rescan-2"), result.Manifest.FinalDir);
@@ -587,14 +594,14 @@ public sealed class ScanProcessorTests
     public void DirectSentinelProcessingRejectsMissingExportDone()
     {
         using var workspace = new TempWorkspace();
-        var sourceDir = workspace.CreateSource("roll-a");
+        var sourceDir = workspace.CreateRoll("roll-a");
         var destinationRoot = workspace.CreateDestination();
         workspace.WriteFile(sourceDir, "frame001.tif", "image-one");
-        var config = workspace.CreateConfig(sourceDir, destinationRoot) with
+        var config = workspace.CreateConfig(workspace.WatchRoot, destinationRoot) with
         {
             Profiles =
             [
-                workspace.CreateProfile(sourceDir, destinationRoot) with
+                workspace.CreateProfile(workspace.WatchRoot, destinationRoot) with
                 {
                     ScannerMode = ScannerModes.FrontierSentinelWatch
                 }
@@ -793,7 +800,7 @@ public sealed class ScanProcessorTests
         Assert.Equal("watch-timeout", failed.ErrorCode);
         Assert.True(Directory.Exists(waitFolder));
         Assert.False(Directory.Exists(workspace.FinalDir(destinationRoot)));
-        Assert.False(Directory.Exists(Path.Combine(destinationRoot, "_processed")));
+        Assert.Empty(Directory.EnumerateDirectories(sourceRoot, "_processed-*"));
     }
 
     [Fact]
@@ -1170,6 +1177,18 @@ public sealed class ScanProcessorTests
             return path;
         }
 
+        /// <summary>The watch folder for roll-style tests; rolls are always folders inside it.</summary>
+        public string WatchRoot => Path.Combine(Root, "sources", "watch");
+
+        public string StagingRoot => Path.Combine(Root, "staging");
+
+        public string CreateRoll(string name)
+        {
+            var path = Path.Combine(WatchRoot, name);
+            Directory.CreateDirectory(path);
+            return path;
+        }
+
         public string CreateDestination()
         {
             var path = Path.Combine(Root, "destination");
@@ -1202,7 +1221,8 @@ public sealed class ScanProcessorTests
                 AllowedSourceRoots = [Path.Combine(Root, "sources")],
                 AllowedDestinationRoots = [destinationRoot],
                 ActiveProfileId = "dev-profile",
-                Profiles = [CreateProfile(sourceDir, destinationRoot)]
+                Profiles = [CreateProfile(sourceDir, destinationRoot)],
+                StagingDir = StagingRoot
             };
 
         public ScanProcessor CreateProcessor(string sourceDir, string destinationRoot) =>

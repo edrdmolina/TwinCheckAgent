@@ -1,22 +1,41 @@
+using System.Diagnostics;
+
 namespace TwinCheck.Agent.Core;
+
+/// <summary>
+/// Either a finished result (a retry of a completed roll, or a dry run), or a roll processed on local disk
+/// that still has to be uploaded.
+/// </summary>
+public sealed record IngestResult(ProcessScanResult? Completed, UploadRoll? Upload);
 
 public sealed class ScanProcessor
 {
+    // Uploads force data to the NAS at this interval instead of in one flush when the file closes.
+    private const long UploadFlushBytes = 64L * 1024 * 1024;
+    private const long ProgressReportBytes = 64L * 1024 * 1024;
+    private const long StagingHeadroomBytes = 1024L * 1024 * 1024;
+
     private readonly AgentConfigProvider configProvider;
     private readonly OperationStore operationStore;
     private readonly IScanImageConverter imageConverter;
     private readonly IScanMetadataWriter metadataWriter;
+    private readonly DestinationWriteLock destinationWrites;
+    private readonly LocalAgentLogger? logger;
 
     public ScanProcessor(
         AgentConfigProvider configProvider,
         OperationStore operationStore,
         IScanImageConverter imageConverter,
-        IScanMetadataWriter? metadataWriter = null)
+        IScanMetadataWriter? metadataWriter = null,
+        DestinationWriteLock? destinationWrites = null,
+        LocalAgentLogger? logger = null)
     {
         this.configProvider = configProvider;
         this.operationStore = operationStore;
         this.imageConverter = imageConverter;
         this.metadataWriter = metadataWriter ?? UnavailableScanMetadataWriter.Instance;
+        this.destinationWrites = destinationWrites ?? new DestinationWriteLock();
+        this.logger = logger;
     }
 
     public ScanProcessor(AgentConfigProvider configProvider, OperationStore operationStore)
@@ -34,7 +53,50 @@ public sealed class ScanProcessor
     {
     }
 
+    /// <summary>Test seam for the free-space check: returns the bytes available at a local folder.</summary>
+    internal Func<string, long>? AvailableSpaceProbe { get; set; }
+
+    internal DestinationWriteLock DestinationWrites => destinationWrites;
+
+    /// <summary>Processes a roll locally, then uploads it inline. Used by the direct process endpoint and tests.</summary>
     public ProcessScanResult Process(ProcessScanRequest request, Action<ScanProgress>? onProgress = null)
+    {
+        var ingested = Ingest(request, onProgress);
+        if (ingested.Completed is { } completed)
+        {
+            return completed;
+        }
+
+        var roll = ingested.Upload! with { Status = UploadStatuses.Uploading, StartedAt = DateTimeOffset.UtcNow };
+        var files = roll.Files.ToList();
+        var totalBytes = roll.TotalBytes;
+        long uploadedBytes = 0;
+        onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Uploading, 0, files.Count, 0, totalBytes, "Uploading to the destination."));
+        for (var index = 0; index < files.Count; index++)
+        {
+            var completedBefore = uploadedBytes;
+            files[index] = UploadFile(files[index], delta =>
+            {
+                uploadedBytes += delta;
+                onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Uploading, index, files.Count, uploadedBytes, totalBytes));
+            });
+            uploadedBytes = completedBefore + files[index].Size;
+            onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Uploading, index + 1, files.Count, uploadedBytes, totalBytes));
+        }
+
+        return FinishUpload(roll with { Files = files }).Result;
+    }
+
+    /// <summary>
+    /// Copies the roll to local staging, converts it, writes metadata and verifies it, all on local disk.
+    /// Then it renames the roll folder to <c>_processed-{order}-{roll}</c> so the watch folder is clear for
+    /// the next roll. <paramref name="beforeHandoff"/> runs just before that rename, so the caller can record
+    /// the roll durably first.
+    /// </summary>
+    public IngestResult Ingest(
+        ProcessScanRequest request,
+        Action<ScanProgress>? onProgress = null,
+        Action<UploadRoll>? beforeHandoff = null)
     {
         var config = configProvider.Current;
         if (string.IsNullOrWhiteSpace(request.IdempotencyKey))
@@ -69,9 +131,11 @@ public sealed class ScanProcessor
         var existingManifest = operationStore.TryReadManifest(finalDir, request.IdempotencyKey);
         if (existingManifest is not null && !request.DryRun)
         {
-            return existingManifest.CompletedAt is not null
-                ? ToResult(existingManifest)
-                : CompletePendingManifest(existingManifest, onProgress);
+            return new IngestResult(
+                existingManifest.CompletedAt is not null
+                    ? ToResult(existingManifest)
+                    : CompletePendingManifest(existingManifest, onProgress),
+                null);
         }
 
         var sourceDir = FileSystemSafety.EnsureInsideAnyRoot(
@@ -84,7 +148,7 @@ public sealed class ScanProcessor
             throw new DirectoryNotFoundException($"Source directory does not exist: {sourceDir}");
         }
 
-        sourceDir = ResolveSourceDirectory(sourceDir);
+        sourceDir = ResolveRollFolder(sourceDir, profile);
 
         if (scannerMode == ScannerModes.FrontierSentinelWatch
             && !File.Exists(Path.Combine(sourceDir, FileSystemSafety.ExportSentinelFileName)))
@@ -106,11 +170,223 @@ public sealed class ScanProcessor
             .ToArray();
 
         var imageFiles = ScannerFileSystem.GetImageFilesNatural(sourceDir);
+        if (imageFiles.Length == 0)
+        {
+            throw new InvalidOperationException($"Source directory contains no image files: {sourceDir}");
+        }
+
         var reviewFiles = files.Except(imageFiles).ToArray();
         var totalBytes = files.Sum(path => new FileInfo(path).Length);
         var fileCount = files.Length;
+        var stagingRoot = config.ResolveStagingRoot();
+        var namingPattern = request.Naming ?? profile.NamingPattern;
+        var reviewDir = Path.Combine(destinationRoot, "_review", SafePathToken(request.IdempotencyKey));
 
         if (request.DryRun)
+        {
+            return new IngestResult(DryRun(), null);
+        }
+
+        EnsureStagingSpace(stagingRoot, files);
+        var stagingDir = CreateStagingDirectory(stagingRoot, SafePathToken(request.IdempotencyKey));
+        var uploadFiles = new List<UploadFile>();
+        var manifestsForFailure = new List<ScanFileManifest>();
+        var handedOff = false;
+
+        try
+        {
+            var inputs = imageFiles.Select((path, index) => new InputScanFile(path, ScanFileKind.Image, index + 1))
+                .Concat(reviewFiles.Select(path => new InputScanFile(path, ScanFileKind.Review, 0)))
+                .ToArray();
+            long copiedBytes = 0;
+            long lastReportedBytes = 0;
+            onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Copying, 0, fileCount, 0, totalBytes, "Copying source files to local staging while calculating checksums."));
+
+            for (var index = 0; index < inputs.Length; index++)
+            {
+                var input = inputs[index];
+                var frame = $"frame {index + 1}/{fileCount}";
+                var timer = Stopwatch.StartNew();
+                var sourceExtension = Path.GetExtension(input.SourcePath).ToLowerInvariant();
+                var stagedSourcePath = Path.Combine(stagingDir, $"{index + 1:D6}-source{sourceExtension}");
+                onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Copying, index, fileCount, copiedBytes, totalBytes, $"Copying {frame} to local staging."));
+                var copied = FileSystemSafety.CopyWithSha256(input.SourcePath, stagedSourcePath, delta =>
+                {
+                    copiedBytes += delta;
+                    if (copiedBytes - lastReportedBytes >= ProgressReportBytes)
+                    {
+                        lastReportedBytes = copiedBytes;
+                        onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Copying, index, fileCount, copiedBytes, totalBytes));
+                    }
+                });
+                var copySeconds = timer.Elapsed.TotalSeconds;
+
+                var stagedOutputPath = stagedSourcePath;
+                var outputExtension = sourceExtension;
+                var outputSize = copied.Length;
+                var outputHash = copied.Sha256;
+                string? conversion = null;
+                double? convertSeconds = null;
+                if (input.Kind == ScanFileKind.Image && ShouldConvertBmp(input.SourcePath, effectiveOptions))
+                {
+                    timer.Restart();
+                    onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Copying, index, fileCount, copiedBytes, totalBytes, $"Converting {frame} to TIFF."));
+                    stagedOutputPath = Path.Combine(stagingDir, $"{index + 1:D6}-output.tif");
+                    try
+                    {
+                        ConvertBmpToTiff(stagedSourcePath, stagedOutputPath);
+                        outputExtension = ".tif";
+                        outputSize = new FileInfo(stagedOutputPath).Length;
+                        outputHash = FileSystemSafety.ComputeSha256(stagedOutputPath);
+                        conversion = ScanFileConversions.BmpToTiff;
+                        File.Delete(stagedSourcePath);
+                    }
+                    catch (Exception exception)
+                    {
+                        manifestsForFailure.Add(new ScanFileManifest
+                        {
+                            SourcePath = input.SourcePath,
+                            FileName = Path.GetFileName(input.SourcePath),
+                            SourceSize = copied.Length,
+                            SourceSha256 = copied.Sha256,
+                            Conversion = ScanFileConversions.BmpToTiff,
+                            Kind = input.Kind,
+                            Outcome = ScanFileOutcome.Failed,
+                            Message = $"BMP-to-TIFF conversion failed: {exception.Message}"
+                        });
+                        throw;
+                    }
+                    convertSeconds = timer.Elapsed.TotalSeconds;
+                }
+
+                double? metadataSeconds = null;
+                if (input.Kind == ScanFileKind.Image && photoMetadata.HasValues)
+                {
+                    timer.Restart();
+                    onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Copying, index, fileCount, copiedBytes, totalBytes, $"Writing metadata to {frame}."));
+                    try
+                    {
+                        metadataWriter.Write(stagedOutputPath, photoMetadata);
+                        outputSize = new FileInfo(stagedOutputPath).Length;
+                        outputHash = FileSystemSafety.ComputeSha256(stagedOutputPath);
+                    }
+                    catch (Exception exception)
+                    {
+                        manifestsForFailure.Add(new ScanFileManifest
+                        {
+                            SourcePath = input.SourcePath, FileName = Path.GetFileName(input.SourcePath),
+                            SourceSize = copied.Length, SourceSha256 = copied.Sha256, Conversion = conversion,
+                            Kind = input.Kind, Outcome = ScanFileOutcome.Failed,
+                            Message = $"Photo metadata write failed: {exception.Message}"
+                        });
+                        throw new ScanMetadataWriteException($"Could not write photo metadata for '{Path.GetFileName(input.SourcePath)}': {exception.Message}", exception);
+                    }
+                    metadataSeconds = timer.Elapsed.TotalSeconds;
+                }
+
+                logger?.Info($"Scan operation {request.IdempotencyKey} {frame} {Path.GetFileName(input.SourcePath)}: "
+                    + $"copy {copySeconds:F1}s"
+                    + (convertSeconds is { } convert ? $", convert {convert:F1}s" : "")
+                    + (metadataSeconds is { } metadata ? $", metadata {metadata:F1}s" : "")
+                    + ".");
+
+                var file = new UploadFile
+                {
+                    Sequence = index + 1,
+                    Kind = input.Kind,
+                    SourcePath = input.SourcePath,
+                    FileName = Path.GetFileName(input.SourcePath),
+                    StagedPath = stagedOutputPath,
+                    PlannedPath = input.Kind == ScanFileKind.Image
+                        ? PlanImagePath(finalDir, namingPattern, request.OrderNumber, request.RollNumber, input.ImageNumber, outputExtension)
+                        : Path.Combine(reviewDir, Path.GetFileName(input.SourcePath)),
+                    SourceSize = copied.Length,
+                    SourceSha256 = copied.Sha256,
+                    Size = outputSize,
+                    Sha256 = outputHash,
+                    Conversion = conversion
+                };
+                uploadFiles.Add(file);
+                manifestsForFailure.Add(file.ToManifest());
+                onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Copying, index + 1, fileCount, copiedBytes, totalBytes));
+            }
+
+            var stagedBytes = uploadFiles.Sum(file => file.Size);
+            long verifiedBytes = 0;
+            long lastVerifiedReport = 0;
+            onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Verifying, 0, fileCount, 0, stagedBytes, "Verifying staged checksums."));
+            for (var index = 0; index < uploadFiles.Count; index++)
+            {
+                var file = uploadFiles[index];
+                FileSystemSafety.VerifySha256(file.StagedPath, file.Size, file.Sha256, delta =>
+                {
+                    verifiedBytes += delta;
+                    if (verifiedBytes - lastVerifiedReport >= ProgressReportBytes)
+                    {
+                        lastVerifiedReport = verifiedBytes;
+                        onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Verifying, index, fileCount, verifiedBytes, stagedBytes));
+                    }
+                });
+                onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Verifying, index + 1, fileCount, verifiedBytes, stagedBytes));
+            }
+
+            var archiveDir = ResolveProcessedFolder(sourceDir, request.OrderNumber, request.RollNumber);
+            var roll = new UploadRoll
+            {
+                IdempotencyKey = request.IdempotencyKey,
+                ProfileId = request.ProfileId,
+                OrderNumber = request.OrderNumber,
+                RollNumber = request.RollNumber,
+                SourceDir = sourceDir,
+                SourceArchiveDir = archiveDir,
+                StagingDir = stagingDir,
+                FinalDir = finalDir,
+                DestinationRoot = destinationRoot,
+                Manifest = BuildManifest(request, sourceDir, destinationRoot, finalDir, false, startedAt, null, [], effectiveOptions, sourceArchiveDir: archiveDir),
+                Files = uploadFiles,
+                Status = UploadStatuses.Handoff
+            };
+            beforeHandoff?.Invoke(roll);
+
+            // Reserve the final folder (and with it the rescan number), then clear the watch folder.
+            destinationWrites.Run(() => Directory.CreateDirectory(finalDir));
+            Directory.Move(sourceDir, archiveDir);
+            handedOff = true;
+            logger?.Info($"Scan operation {request.IdempotencyKey} processed locally; renamed the roll folder to {archiveDir}.");
+            return new IngestResult(null, roll with { Status = UploadStatuses.Waiting });
+        }
+        catch
+        {
+            if (!handedOff)
+            {
+                var failedManifest = BuildManifest(
+                    request,
+                    sourceDir,
+                    destinationRoot,
+                    finalDir,
+                    false,
+                    startedAt,
+                    DateTimeOffset.UtcNow,
+                    manifestsForFailure.Select(file => file with { Outcome = ScanFileOutcome.Failed }).ToArray(),
+                    effectiveOptions,
+                    warnings: ["Operation failed before upload; source originals remain in place."]);
+
+                TryDeleteDirectory(stagingDir);
+                try
+                {
+                    destinationWrites.Run(() => operationStore.WriteManifest(failedManifest));
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    // Keep the processing error; the failure record is only a convenience on the destination.
+                    logger?.Warning($"Could not write the failure manifest for {request.IdempotencyKey}: {exception.Message}");
+                }
+            }
+
+            throw;
+        }
+
+        ProcessScanResult DryRun()
         {
             var manifests = new List<ScanFileManifest>();
             onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Hashing, 0, fileCount, 0, totalBytes, "Calculating dry-run checksums."));
@@ -129,7 +405,7 @@ public sealed class ScanProcessor
                     if (ShouldConvertBmp(sourcePath, effectiveOptions))
                     {
                         dryRunStagingDir ??= CreateStagingDirectory(
-                            destinationRoot,
+                            stagingRoot,
                             $"dry-run-{SafePathToken(request.IdempotencyKey)}-{Guid.NewGuid():N}");
                         outputPath = Path.Combine(dryRunStagingDir, $"{index + 1:D6}.tif");
                         ConvertBmpToTiff(sourcePath, outputPath);
@@ -140,13 +416,8 @@ public sealed class ScanProcessor
                     var outputSize = new FileInfo(outputPath).Length;
                     var outputHash = conversion is null ? sourceHash : FileSystemSafety.ComputeSha256(outputPath);
                     hashedBytes += sourceSize;
-                    var plannedPath = ResolveDestinationPath(
-                        finalDir,
-                        request.Naming ?? profile.NamingPattern,
-                        request.OrderNumber,
-                        request.RollNumber,
-                        index + 1,
-                        outputExtension,
+                    var plannedPath = ResolveImageCollision(
+                        PlanImagePath(finalDir, namingPattern, request.OrderNumber, request.RollNumber, index + 1, outputExtension),
                         outputHash);
 
                     manifests.Add(new ScanFileManifest
@@ -174,7 +445,7 @@ public sealed class ScanProcessor
                     manifests.Add(new ScanFileManifest
                     {
                         SourcePath = sourcePath,
-                        DestinationPath = Path.Combine(destinationRoot, "_review", SafePathToken(request.IdempotencyKey), Path.GetFileName(sourcePath)),
+                        DestinationPath = Path.Combine(reviewDir, Path.GetFileName(sourcePath)),
                         FileName = Path.GetFileName(sourcePath),
                         SourceSize = size,
                         SourceSha256 = sourceHash,
@@ -182,230 +453,176 @@ public sealed class ScanProcessor
                         Sha256 = sourceHash,
                         Kind = ScanFileKind.Review,
                         Outcome = ScanFileOutcome.Planned,
-                        Message = "Not a supported image extension; routed to review instead of deleting."
+                        Message = ReviewMessage
                     });
                     onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Hashing, manifests.Count, fileCount, hashedBytes, totalBytes));
                 }
 
-                var dryRunManifest = BuildManifest(request, sourceDir, destinationRoot, finalDir, true, startedAt, null, manifests, effectiveOptions);
-                return ToResult(dryRunManifest);
+                return ToResult(BuildManifest(request, sourceDir, destinationRoot, finalDir, true, startedAt, null, manifests, effectiveOptions));
             }
             finally
             {
                 TryDeleteDirectory(dryRunStagingDir);
             }
         }
+    }
 
-        var stagingDir = CreateStagingDirectory(destinationRoot, SafePathToken(request.IdempotencyKey));
-        var preparedFiles = new List<PreparedScanFile>();
-        var manifestsForFailure = new List<ScanFileManifest>();
-        var provisionalManifestWritten = false;
-
-        try
+    /// <summary>
+    /// Uploads one staged file: copy to a hidden partial name, verify it on the destination, then rename.
+    /// Safe to repeat after a crash at any point.
+    /// </summary>
+    /// <param name="onPlanned">Called with the chosen final name before the rename, so it survives a crash.</param>
+    internal UploadFile UploadFile(UploadFile file, Action<long>? onBytes = null, Action<UploadFile>? onPlanned = null)
+    {
+        if (file.State == UploadFileStates.Uploaded)
         {
-            var inputs = imageFiles.Select((path, index) => new InputScanFile(path, ScanFileKind.Image, index + 1))
-                .Concat(reviewFiles.Select(path => new InputScanFile(path, ScanFileKind.Review, 0)))
-                .ToArray();
-            long copiedBytes = 0;
-            long lastReportedBytes = 0;
-            onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Copying, 0, fileCount, 0, totalBytes, "Copying source files into staging while calculating checksums."));
-
-            for (var index = 0; index < inputs.Length; index++)
-            {
-                var input = inputs[index];
-                var sourceExtension = Path.GetExtension(input.SourcePath).ToLowerInvariant();
-                var stagedSourcePath = Path.Combine(stagingDir, $"{index + 1:D6}-source{sourceExtension}");
-                var copied = FileSystemSafety.CopyWithSha256(input.SourcePath, stagedSourcePath, delta =>
-                {
-                    copiedBytes += delta;
-                    if (copiedBytes - lastReportedBytes >= 64L * 1024 * 1024)
-                    {
-                        lastReportedBytes = copiedBytes;
-                        onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Copying, index, fileCount, copiedBytes, totalBytes));
-                    }
-                });
-
-                var stagedOutputPath = stagedSourcePath;
-                var outputExtension = sourceExtension;
-                var outputSize = copied.Length;
-                var outputHash = copied.Sha256;
-                string? conversion = null;
-                if (input.Kind == ScanFileKind.Image && ShouldConvertBmp(input.SourcePath, effectiveOptions))
-                {
-                    stagedOutputPath = Path.Combine(stagingDir, $"{index + 1:D6}-output.tif");
-                    try
-                    {
-                        ConvertBmpToTiff(stagedSourcePath, stagedOutputPath);
-                        outputExtension = ".tif";
-                        outputSize = new FileInfo(stagedOutputPath).Length;
-                        outputHash = FileSystemSafety.ComputeSha256(stagedOutputPath);
-                        conversion = ScanFileConversions.BmpToTiff;
-                        File.Delete(stagedSourcePath);
-                    }
-                    catch (Exception exception)
-                    {
-                        manifestsForFailure.Add(new ScanFileManifest
-                        {
-                            SourcePath = input.SourcePath,
-                            FileName = Path.GetFileName(input.SourcePath),
-                            SourceSize = copied.Length,
-                            SourceSha256 = copied.Sha256,
-                            Conversion = ScanFileConversions.BmpToTiff,
-                            Kind = input.Kind,
-                            Outcome = ScanFileOutcome.Failed,
-                            Message = $"BMP-to-TIFF conversion failed: {exception.Message}"
-                        });
-                        throw;
-                    }
-                }
-
-                if (input.Kind == ScanFileKind.Image && photoMetadata.HasValues)
-                {
-                    try
-                    {
-                        metadataWriter.Write(stagedOutputPath, photoMetadata);
-                        outputSize = new FileInfo(stagedOutputPath).Length;
-                        outputHash = FileSystemSafety.ComputeSha256(stagedOutputPath);
-                    }
-                    catch (Exception exception)
-                    {
-                        manifestsForFailure.Add(new ScanFileManifest
-                        {
-                            SourcePath = input.SourcePath, FileName = Path.GetFileName(input.SourcePath),
-                            SourceSize = copied.Length, SourceSha256 = copied.Sha256, Conversion = conversion,
-                            Kind = input.Kind, Outcome = ScanFileOutcome.Failed,
-                            Message = $"Photo metadata write failed: {exception.Message}"
-                        });
-                        throw new ScanMetadataWriteException($"Could not write photo metadata for '{Path.GetFileName(input.SourcePath)}': {exception.Message}", exception);
-                    }
-                }
-
-                var destination = input.Kind == ScanFileKind.Image
-                    ? ResolveDestinationPath(
-                        finalDir,
-                        request.Naming ?? profile.NamingPattern,
-                        request.OrderNumber,
-                        request.RollNumber,
-                        input.ImageNumber,
-                        outputExtension,
-                        outputHash)
-                    : ResolveReviewDestination(
-                        Path.Combine(destinationRoot, "_review", SafePathToken(request.IdempotencyKey), Path.GetFileName(input.SourcePath)),
-                        outputHash);
-
-                var alreadyAtDestination = destination.Outcome == ScanFileOutcome.AlreadyDone;
-                var fileManifest = new ScanFileManifest
-                {
-                    SourcePath = input.SourcePath,
-                    DestinationPath = destination.Path,
-                    FileName = Path.GetFileName(input.SourcePath),
-                    SourceSize = copied.Length,
-                    SourceSha256 = copied.Sha256,
-                    Size = outputSize,
-                    Sha256 = outputHash,
-                    Conversion = conversion,
-                    Kind = input.Kind,
-                    Outcome = input.Kind == ScanFileKind.Review ? ScanFileOutcome.MovedToReview : destination.Outcome,
-                    Message = input.Kind == ScanFileKind.Review
-                        ? "Not a supported image extension; routed to review instead of deleting."
-                        : destination.Message
-                };
-                preparedFiles.Add(new PreparedScanFile(fileManifest, stagedOutputPath, alreadyAtDestination));
-                manifestsForFailure.Add(fileManifest);
-                onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Copying, index + 1, fileCount, copiedBytes, totalBytes));
-            }
-
-            var outputTotalBytes = preparedFiles.Sum(file => file.Manifest.Size);
-            long verifiedBytes = 0;
-            long lastVerifiedReport = 0;
-            onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Verifying, 0, fileCount, 0, outputTotalBytes, "Verifying staged checksums."));
-            for (var index = 0; index < preparedFiles.Count; index++)
-            {
-                var prepared = preparedFiles[index];
-                FileSystemSafety.VerifySha256(prepared.StagedPath, prepared.Manifest.Size, prepared.Manifest.Sha256!, delta =>
-                {
-                    verifiedBytes += delta;
-                    if (verifiedBytes - lastVerifiedReport >= 64L * 1024 * 1024)
-                    {
-                        lastVerifiedReport = verifiedBytes;
-                        onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Verifying, index, fileCount, verifiedBytes, outputTotalBytes));
-                    }
-                });
-                onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Verifying, index + 1, fileCount, verifiedBytes, outputTotalBytes));
-            }
-
-            var finalizedFiles = new List<ScanFileManifest>();
-            onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Finalizing, 0, fileCount, 0, outputTotalBytes, "Finalizing verified files."));
-            for (var index = 0; index < preparedFiles.Count; index++)
-            {
-                var prepared = preparedFiles[index];
-                if (prepared.AlreadyAtDestination)
-                {
-                    File.Delete(prepared.StagedPath);
-                }
-                else
-                {
-                    Directory.CreateDirectory(Path.GetDirectoryName(prepared.Manifest.DestinationPath!)!);
-                    File.Move(prepared.StagedPath, prepared.Manifest.DestinationPath!, overwrite: false);
-                }
-
-                finalizedFiles.Add(prepared.Manifest);
-                onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Finalizing, index + 1, fileCount, finalizedFiles.Sum(file => file.Size), outputTotalBytes));
-            }
-
-            var archiveDir = BuildSourceArchiveDirectory(sourceDir, destinationRoot, request.IdempotencyKey);
-            var manifest = BuildManifest(
-                request,
-                sourceDir,
-                destinationRoot,
-                finalDir,
-                false,
-                startedAt,
-                null,
-                finalizedFiles,
-                effectiveOptions,
-                sourceArchiveDir: archiveDir);
-
-            operationStore.WriteManifest(manifest);
-            provisionalManifestWritten = true;
-            onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Archiving, 0, fileCount, 0, totalBytes, "Archiving original source folder."));
-            ArchiveSourceFolder(sourceDir, archiveDir);
-
-            var completedManifest = manifest with { CompletedAt = DateTimeOffset.UtcNow };
-            operationStore.WriteManifest(completedManifest);
-            onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Archiving, fileCount, fileCount, totalBytes, totalBytes, "Source archive completed."));
-            return ToResult(completedManifest);
+            return file;
         }
-        catch
+
+        return destinationWrites.Run(() =>
         {
-            if (provisionalManifestWritten)
+            if (file.State == UploadFileStates.Publishing
+                && file.DestinationPath is { } chosen
+                && File.Exists(chosen)
+                && string.Equals(FileSystemSafety.ComputeSha256(chosen), file.Sha256, StringComparison.OrdinalIgnoreCase))
             {
+                // The previous attempt finished the rename but not the bookkeeping.
+                TryDeleteFile(file.StagedPath);
+                return file with { State = UploadFileStates.Uploaded };
+            }
+
+            if (!File.Exists(file.StagedPath))
+            {
+                throw new UploadStagedFileException($"The local copy of {file.FileName} is missing: {file.StagedPath}");
+            }
+
+            try
+            {
+                FileSystemSafety.VerifySha256(file.StagedPath, file.Size, file.Sha256);
+            }
+            catch (IOException exception)
+            {
+                throw new UploadStagedFileException($"The local copy of {file.FileName} is damaged ({exception.Message}): {file.StagedPath}");
+            }
+
+            var destination = file.Kind == ScanFileKind.Image
+                ? ResolveImageCollision(file.PlannedPath, file.Sha256)
+                : ResolveReviewCollision(file.PlannedPath, file.Sha256);
+            var planned = file with
+            {
+                State = UploadFileStates.Publishing,
+                DestinationPath = destination.Path,
+                Outcome = file.Kind == ScanFileKind.Review ? ScanFileOutcome.MovedToReview : destination.Outcome,
+                Message = file.Kind == ScanFileKind.Review ? ReviewMessage : destination.Message
+            };
+            if (destination.Outcome == ScanFileOutcome.AlreadyDone)
+            {
+                TryDeleteFile(file.StagedPath);
+                return planned with { State = UploadFileStates.Uploaded };
+            }
+
+            onPlanned?.Invoke(planned);
+            var directory = Path.GetDirectoryName(destination.Path)!;
+            Directory.CreateDirectory(directory);
+            var partialPath = Path.Combine(directory, $".{Path.GetFileName(destination.Path)}.twincheck-partial");
+            if (File.Exists(partialPath))
+            {
+                File.Delete(partialPath);
+            }
+
+            try
+            {
+                var copied = FileSystemSafety.CopyWithSha256(file.StagedPath, partialPath, onBytes, UploadFlushBytes);
+                if (copied.Length != file.Size || !string.Equals(copied.Sha256, file.Sha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new IOException($"The local copy of {file.FileName} changed during upload.");
+                }
+
+                FileSystemSafety.VerifySha256(partialPath, file.Size, file.Sha256);
+                File.Move(partialPath, destination.Path, overwrite: false);
+            }
+            catch
+            {
+                TryDeleteFile(partialPath);
                 throw;
             }
 
-            var failedManifest = BuildManifest(
-                request,
-                sourceDir,
-                destinationRoot,
-                finalDir,
-                false,
-                startedAt,
-                DateTimeOffset.UtcNow,
-                manifestsForFailure.Select(file => file with { Outcome = file.Outcome == ScanFileOutcome.AlreadyDone ? file.Outcome : ScanFileOutcome.Failed }).ToArray(),
-                effectiveOptions,
-                warnings: ["Operation failed before source archive; source originals remain in place."]);
+            TryDeleteFile(file.StagedPath);
+            return planned with { State = UploadFileStates.Uploaded };
+        });
+    }
 
-            operationStore.WriteManifest(failedManifest);
-            throw;
-        }
-        finally
+    /// <summary>
+    /// Writes the completed manifest, then deletes the <c>_processed-…</c> folder and the local staging copy.
+    /// The folder is kept, with a warning, when it holds anything that was not uploaded.
+    /// </summary>
+    internal (ProcessScanResult Result, UploadRoll Roll) FinishUpload(UploadRoll roll, Action<UploadRoll>? onManifestWritten = null)
+    {
+        OperationManifest manifest;
+        if (roll.ManifestWritten)
         {
-            TryDeleteDirectory(stagingDir);
+            manifest = operationStore.TryReadManifest(roll.FinalDir, roll.IdempotencyKey) ?? BuildCompletedManifest(roll);
         }
+        else
+        {
+            manifest = BuildCompletedManifest(roll);
+            destinationWrites.Run(() => operationStore.WriteManifest(manifest));
+            roll = roll with { ManifestWritten = true, CompletedAt = manifest.CompletedAt };
+            onManifestWritten?.Invoke(roll);
+        }
+
+        var warning = destinationWrites.Run(() => CleanUpProcessedFolder(roll));
+        if (warning is not null)
+        {
+            logger?.Warning($"Scan operation {roll.IdempotencyKey}: {warning}");
+        }
+
+        TryDeleteDirectory(roll.StagingDir);
+        return (ToResult(manifest), roll with { CleanupWarning = warning });
+    }
+
+    private static OperationManifest BuildCompletedManifest(UploadRoll roll)
+    {
+        var files = roll.Files.Select(file => file.ToManifest()).ToArray();
+        return roll.Manifest with
+        {
+            Files = files,
+            Ok = files.All(file => file.Outcome != ScanFileOutcome.Failed),
+            SourceArchiveDir = roll.SourceArchiveDir,
+            CompletedAt = roll.CompletedAt ?? DateTimeOffset.UtcNow
+        };
+    }
+
+    private static string? CleanUpProcessedFolder(UploadRoll roll)
+    {
+        var folder = roll.SourceArchiveDir;
+        if (!Directory.Exists(folder))
+        {
+            return null;
+        }
+
+        var uploadedNames = roll.Files.Select(file => Path.GetFileName(file.SourcePath)).ToHashSet(FileNameComparer);
+        var leftovers = Directory.EnumerateDirectories(folder)
+            .Select(path => Path.GetFileName(Path.TrimEndingDirectorySeparator(path)) + Path.DirectorySeparatorChar)
+            .Concat(Directory.EnumerateFiles(folder)
+                .Where(path => !FileSystemSafety.IsIgnoredControlFile(path) && !uploadedNames.Contains(Path.GetFileName(path)))
+                .Select(Path.GetFileName))
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (leftovers.Length > 0)
+        {
+            const int listed = 5;
+            var names = string.Join(", ", leftovers.Take(listed)) + (leftovers.Length > listed ? $", and {leftovers.Length - listed} more" : "");
+            return $"Kept {folder} because it contains items that were not uploaded: {names}. Review it in Cleanup.";
+        }
+
+        Directory.Delete(folder, recursive: true);
+        return null;
     }
 
     private ProcessScanResult CompletePendingManifest(OperationManifest manifest, Action<ScanProgress>? onProgress)
     {
+        // Recovers a roll left pending by an agent version that archived sources into _processed/.
         var files = manifest.Files.Where(file => !string.IsNullOrWhiteSpace(file.DestinationPath)).ToArray();
         var totalBytes = files.Sum(file => file.Size);
         long verifiedBytes = 0;
@@ -425,17 +642,37 @@ public sealed class ScanProcessor
         var archiveDir = manifest.SourceArchiveDir
             ?? BuildSourceArchiveDirectory(manifest.SourceDir, manifest.DestinationDir, manifest.IdempotencyKey);
         onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Archiving, 0, files.Length, 0, totalBytes, "Recovering source archival."));
-        ArchiveSourceFolder(manifest.SourceDir, archiveDir);
+        destinationWrites.Run(() => ArchiveSourceFolder(manifest.SourceDir, archiveDir));
 
         var completed = manifest with
         {
             SourceArchiveDir = archiveDir,
             CompletedAt = DateTimeOffset.UtcNow
         };
-        operationStore.WriteManifest(completed);
+        destinationWrites.Run(() => operationStore.WriteManifest(completed));
         onProgress?.Invoke(new ScanProgress(ScanOperationPhases.Archiving, files.Length, files.Length, totalBytes, totalBytes));
         return ToResult(completed);
     }
+
+    private void EnsureStagingSpace(string stagingRoot, IReadOnlyCollection<string> files)
+    {
+        Directory.CreateDirectory(stagingRoot);
+        var sizes = files.Select(path => new FileInfo(path).Length).ToArray();
+        // Room for the roll, one extra file for a conversion or metadata rewrite in progress, and headroom.
+        var required = sizes.Sum() + sizes.DefaultIfEmpty(0).Max() + StagingHeadroomBytes;
+        var available = (AvailableSpaceProbe ?? (path => new DriveInfo(path).AvailableFreeSpace))(stagingRoot);
+        if (available < required)
+        {
+            throw new IOException(
+                $"Not enough local disk space to process this roll: {FormatBytes(required)} needed in {stagingRoot}, "
+                + $"{FormatBytes(available)} free. The roll was left in place.");
+        }
+    }
+
+    private static string FormatBytes(long bytes) =>
+        bytes >= 1024L * 1024 * 1024
+            ? $"{bytes / (1024.0 * 1024 * 1024):F1} GB"
+            : $"{bytes / (1024.0 * 1024):F0} MB";
 
     private static OperationManifest BuildManifest(
         ProcessScanRequest request,
@@ -470,34 +707,41 @@ public sealed class ScanProcessor
             Warnings = warnings ?? []
         };
 
-    private static (string Path, ScanFileOutcome Outcome, string? Message) ResolveDestinationPath(
+    private const string ReviewMessage = "Not a supported image extension; routed to review instead of deleting.";
+
+    private static string PlanImagePath(
         string finalDir,
         string namingPattern,
         string orderNumber,
         string rollNumber,
         int imageNumber,
-        string extension,
-        string sourceHash)
+        string extension)
     {
         var baseName = namingPattern
             .Replace("{orderNumber}", orderNumber, StringComparison.OrdinalIgnoreCase)
             .Replace("{rollNumber}", rollNumber, StringComparison.OrdinalIgnoreCase)
             .Replace("{imgNumber}", imageNumber.ToString(), StringComparison.OrdinalIgnoreCase);
+        return Path.Combine(finalDir, baseName + extension.ToLowerInvariant());
+    }
 
-        var candidate = Path.Combine(finalDir, baseName + extension.ToLowerInvariant());
+    private static (string Path, ScanFileOutcome Outcome, string? Message) ResolveImageCollision(string candidate, string hash)
+    {
         if (!File.Exists(candidate))
         {
             return (candidate, ScanFileOutcome.Copied, null);
         }
 
-        if (string.Equals(FileSystemSafety.ComputeSha256(candidate), sourceHash, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(FileSystemSafety.ComputeSha256(candidate), hash, StringComparison.OrdinalIgnoreCase))
         {
             return (candidate, ScanFileOutcome.AlreadyDone, "Destination already contains an identical file.");
         }
 
+        var directory = Path.GetDirectoryName(candidate)!;
+        var baseName = Path.GetFileNameWithoutExtension(candidate);
+        var extension = Path.GetExtension(candidate);
         for (var version = 2; version < 1000; version++)
         {
-            var versioned = Path.Combine(finalDir, $"{baseName}-v{version}{extension.ToLowerInvariant()}");
+            var versioned = Path.Combine(directory, $"{baseName}-v{version}{extension}");
             if (!File.Exists(versioned))
             {
                 return (versioned, ScanFileOutcome.ConflictRenamed, $"Destination name exists with different content; wrote version {version}.");
@@ -507,14 +751,14 @@ public sealed class ScanProcessor
         throw new IOException($"Could not resolve a collision-free destination for '{candidate}'.");
     }
 
-    private static (string Path, ScanFileOutcome Outcome, string? Message) ResolveReviewDestination(string candidate, string sourceHash)
+    private static (string Path, ScanFileOutcome Outcome, string? Message) ResolveReviewCollision(string candidate, string hash)
     {
         if (!File.Exists(candidate))
         {
             return (candidate, ScanFileOutcome.MovedToReview, null);
         }
 
-        if (string.Equals(FileSystemSafety.ComputeSha256(candidate), sourceHash, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(FileSystemSafety.ComputeSha256(candidate), hash, StringComparison.OrdinalIgnoreCase))
         {
             return (candidate, ScanFileOutcome.AlreadyDone, "Review destination already contains an identical file.");
         }
@@ -586,18 +830,34 @@ public sealed class ScanProcessor
         return Math.Max(2, max + 1);
     }
 
-    private static string ResolveSourceDirectory(string configuredSourceDir)
+    /// <summary>
+    /// Rolls are always folders inside the watch folder. Given the watch folder, picks its only roll;
+    /// loose files in the watch folder are never processed.
+    /// </summary>
+    private static string ResolveRollFolder(string sourceDir, ScannerProfile profile)
     {
-        var topLevelFiles = Directory.EnumerateFiles(configuredSourceDir).ToArray();
-        if (topLevelFiles.Length > 0)
+        var configuredRoot = Path.GetFullPath(profile.SourceDir);
+        var watchRoot = Path.GetFullPath(SourceCandidateService.ResolveCandidateRoot(profile));
+        if (!PathsEqual(sourceDir, configuredRoot) && !PathsEqual(sourceDir, watchRoot))
         {
-            return configuredSourceDir;
+            if (FileSystemSafety.IsProcessedFolder(sourceDir))
+            {
+                throw new InvalidOperationException($"This roll folder was already processed and is waiting for its upload: {sourceDir}");
+            }
+
+            return sourceDir;
         }
 
-        var candidateDirs = Directory.EnumerateDirectories(configuredSourceDir)
+        if (!Directory.Exists(watchRoot))
+        {
+            throw new DirectoryNotFoundException($"Watch folder does not exist: {watchRoot}");
+        }
+
+        var candidateDirs = Directory.EnumerateDirectories(watchRoot)
+            .Where(path => !FileSystemSafety.IsProcessedFolder(path))
             .Select(path => new
             {
-                Path = path,
+                Path = Path.GetFullPath(path),
                 ImageCount = Directory.EnumerateFiles(path).Count(FileSystemSafety.IsImageFile)
             })
             .Where(candidate => candidate.ImageCount > 0)
@@ -613,11 +873,32 @@ public sealed class ScanProcessor
         {
             var names = string.Join(", ", candidateDirs.Select(candidate => Path.GetFileName(candidate.Path)));
             throw new MultipleSourceCandidatesException(
-                configuredSourceDir,
+                watchRoot,
                 $"Source root contains multiple candidate roll folders. Select the exact roll folder before processing: {names}");
         }
 
-        throw new InvalidOperationException($"Source directory contains no image files: {configuredSourceDir}");
+        throw new InvalidOperationException(
+            $"Watch folder contains no roll folders with images: {watchRoot}. Scans must be saved in a folder inside the watch folder.");
+    }
+
+    /// <summary>The roll folder's new name beside it in the watch folder: <c>_processed-{order}-{roll}</c>.</summary>
+    private static string ResolveProcessedFolder(string sourceDir, string orderNumber, string rollNumber)
+    {
+        var parent = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(sourceDir))
+            ?? throw new IOException($"Roll folder has no parent folder: {sourceDir}");
+        var baseName = $"{FileSystemSafety.ProcessedFolderPrefix}{SafePathToken(orderNumber)}-{SafePathToken(rollNumber)}";
+        var candidate = Path.Combine(parent, baseName);
+        for (var suffix = 2; Directory.Exists(candidate) || File.Exists(candidate); suffix++)
+        {
+            if (suffix >= 1000)
+            {
+                throw new IOException($"Could not find a free name for the processed roll folder in {parent}.");
+            }
+
+            candidate = Path.Combine(parent, $"{baseName}-{suffix}");
+        }
+
+        return candidate;
     }
 
     private static string BuildSourceArchiveDirectory(string sourceDir, string destinationRoot, string idempotencyKey)
@@ -627,6 +908,7 @@ public sealed class ScanProcessor
         return Path.Combine(processedRoot, $"{sourceName}-{SafePathToken(idempotencyKey)}");
     }
 
+    /// <summary>Moves a source into the legacy <c>_processed/</c> archive; only used to recover older rolls.</summary>
     internal static void ArchiveSourceFolder(string sourceDir, string archiveDir, bool forceCopy = false)
     {
         if (!Directory.Exists(sourceDir))
@@ -680,7 +962,7 @@ public sealed class ScanProcessor
         foreach (var sourceFile in Directory.EnumerateFiles(sourceDir))
         {
             var destinationFile = Path.Combine(destinationDir, Path.GetFileName(sourceFile));
-            FileSystemSafety.CopyAndVerify(sourceFile, destinationFile);
+            FileSystemSafety.CopyAndVerify(sourceFile, destinationFile, UploadFlushBytes);
         }
 
         foreach (var sourceChildDir in Directory.EnumerateDirectories(sourceDir))
@@ -709,7 +991,7 @@ public sealed class ScanProcessor
         }
     }
 
-    private static string SafePathToken(string value) =>
+    internal static string SafePathToken(string value) =>
         string.Concat(value.Select(character => char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '-'));
 
     private static bool ShouldConvertBmp(string sourcePath, ScanOptions options) =>
@@ -732,9 +1014,9 @@ public sealed class ScanProcessor
         }
     }
 
-    private static string CreateStagingDirectory(string destinationRoot, string directoryName)
+    private static string CreateStagingDirectory(string stagingRoot, string directoryName)
     {
-        var stagingDir = Path.Combine(destinationRoot, ".twincheck-staging", directoryName);
+        var stagingDir = Path.Combine(stagingRoot, directoryName);
         if (Directory.Exists(stagingDir))
         {
             Directory.Delete(stagingDir, recursive: true);
@@ -754,17 +1036,25 @@ public sealed class ScanProcessor
         try
         {
             Directory.Delete(directory, recursive: true);
-            var parent = Path.GetDirectoryName(directory);
-            if (!string.IsNullOrWhiteSpace(parent)
-                && Directory.Exists(parent)
-                && !Directory.EnumerateFileSystemEntries(parent).Any())
-            {
-                Directory.Delete(parent);
-            }
         }
         catch
         {
             // Staging cleanup is best effort; the next operation recreates its private directory.
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+            // A leftover local copy is removed with the roll's staging folder.
         }
     }
 
@@ -776,6 +1066,13 @@ public sealed class ScanProcessor
             manifest.Files.Where(file => file.Outcome == ScanFileOutcome.ConflictRenamed).ToArray(),
             manifest.Files.Where(file => file.Kind == ScanFileKind.Review).ToArray());
 
+    private static bool PathsEqual(string left, string right) =>
+        FileNameComparer.Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)));
+
+    private static StringComparer FileNameComparer =>
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
     private sealed record InputScanFile(string SourcePath, ScanFileKind Kind, int ImageNumber);
-    private sealed record PreparedScanFile(ScanFileManifest Manifest, string StagedPath, bool AlreadyAtDestination);
 }

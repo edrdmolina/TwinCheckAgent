@@ -64,6 +64,9 @@ public sealed class ScanMetadataTests : IDisposable
     {
         var source = CreateImage(extension);
         var sourceHash = FileSystemSafety.ComputeSha256(source);
+        // Processing deletes the original once the upload is verified, so compare pixels with a copy.
+        var reference = Path.Combine(root, "reference" + extension);
+        File.Copy(source, reference);
         var profile = Profile() with { Options = new ScanOptions { BmpToTiff = conversion, Exif = new ExifOptions { Make = "Fujifilm", Model = "SP500", Artist = "Fallback artist" } } };
         var processor = Processor(profile, Writer());
         var result = processor.Process(Request() with
@@ -73,13 +76,12 @@ public sealed class ScanMetadataTests : IDisposable
             Options = new ScanOptions { BmpToTiff = conversion, Exif = new ExifOptions { Make = "Injected Make", Model = "Injected Model", Artist = "Injected Artist" } }
         });
         var file = Assert.Single(result.Manifest.Files);
-        var archive = Path.Combine(result.Manifest.SourceArchiveDir!, Path.GetFileName(source));
-        Assert.Equal(sourceHash, FileSystemSafety.ComputeSha256(archive));
+        Assert.False(File.Exists(source));
         Assert.Equal(sourceHash, file.SourceSha256);
         Assert.NotEqual(sourceHash, file.Sha256);
         // The delivered checksum must include the metadata edit and match the verified staged output.
         FileSystemSafety.VerifySha256(file.DestinationPath!, file.Size, file.Sha256!);
-        using var original = new MagickImage(archive);
+        using var original = new MagickImage(reference);
         using var delivered = new MagickImage(file.DestinationPath!);
         Assert.Equal(0, original.Compare(delivered, ErrorMetric.Absolute));
         // TIFF stores these native IFD tags rather than a separate EXIF profile blob.
@@ -176,7 +178,7 @@ public sealed class ScanMetadataTests : IDisposable
         Assert.Contains("intentional failure", failed.Error);
         Assert.Equal(hash, FileSystemSafety.ComputeSha256(source));
         Assert.Empty(Directory.GetFiles(profile.DestinationDir, "*.jpg", SearchOption.AllDirectories));
-        Assert.False(Directory.Exists(Path.Combine(profile.DestinationDir, "_processed")));
+        Assert.Empty(Directory.EnumerateDirectories(profile.SourceDir, "_processed-*"));
     }
 
     [Fact]
@@ -239,7 +241,8 @@ public sealed class ScanMetadataTests : IDisposable
 
     private string CreateImage(string extension)
     {
-        var source = Path.Combine(root, "source");
+        // Rolls are always folders inside the watch folder.
+        var source = Path.Combine(root, "source", "roll-1");
         Directory.CreateDirectory(source);
         var file = Path.Combine(source, "scan001" + extension);
         using var image = new MagickImage(MagickColors.Crimson, 32, 24);
@@ -249,8 +252,8 @@ public sealed class ScanMetadataTests : IDisposable
     }
 
     private ScannerProfile Profile() => new() { Id = "scanner", Name = "Scanner", SourceDir = Path.Combine(root, "source"), DestinationDir = Path.Combine(root, "output") };
-    private static AgentConfig Config(ScannerProfile profile) => new() { ApiKey = "test", Profiles = [profile], AllowedSourceRoots = [profile.SourceDir], AllowedDestinationRoots = [profile.DestinationDir] };
-    private static ScanProcessor Processor(ScannerProfile profile, IScanMetadataWriter writer) => new(new AgentConfigProvider(Config(profile)), new OperationStore(), new MagickScanImageConverter(), writer);
+    private AgentConfig Config(ScannerProfile profile) => new() { ApiKey = "test", Profiles = [profile], AllowedSourceRoots = [profile.SourceDir], AllowedDestinationRoots = [profile.DestinationDir], StagingDir = Path.Combine(root, "staging") };
+    private ScanProcessor Processor(ScannerProfile profile, IScanMetadataWriter writer) => new(new AgentConfigProvider(Config(profile)), new OperationStore(), new MagickScanImageConverter(), writer);
     private static ProcessScanRequest Request() => new() { IdempotencyKey = "metadata-job", ProfileId = "scanner", OrderNumber = "B123", RollNumber = "1" };
 
     private static object? ReverseKeys(JsonElement element) => element.ValueKind switch
