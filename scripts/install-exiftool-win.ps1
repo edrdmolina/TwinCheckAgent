@@ -15,7 +15,8 @@ $work = Join-Path ([System.IO.Path]::GetTempPath()) ("twincheck-exiftool-" + [Gu
 try {
     New-Item -ItemType Directory -Force $work | Out-Null
     $zip = Join-Path $work "exiftool.zip"
-    Invoke-WebRequest -Uri "https://downloads.sourceforge.net/project/exiftool/exiftool-${version}_${bits}.zip" -OutFile $zip
+    # SourceForge serves its HTML download page to PowerShell's browser-like user agent; a download tool gets the file.
+    Invoke-WebRequest -Uri "https://downloads.sourceforge.net/project/exiftool/exiftool-${version}_${bits}.zip" -OutFile $zip -UserAgent "Wget"
     if ((Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant() -ne $expectedHash) {
         throw "The ExifTool download does not match the official SHA256 checksum."
     }
